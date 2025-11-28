@@ -48,6 +48,7 @@ fn setup_scene(mut commands: Commands) {
         },
         MoveTarget::default(),
         SneezeCount::default(),
+        PlayerBee,
         Sprite {
             color: Color::srgb(1.0, 0.9, 0.2),
             custom_size: Some(Vec2::new(30.0, 30.0)),
@@ -64,6 +65,17 @@ fn setup_scene(mut commands: Commands) {
             ..default()
         },
         Transform::from_xyz(-150.0, 50.0, 1.0),
+    ));
+
+    // AI Healer Companion (green color)
+    commands.spawn((
+        AiHealerBundle::default(),
+        Sprite {
+            color: Color::srgb(0.3, 0.8, 0.4),
+            custom_size: Some(Vec2::new(26.0, 26.0)),
+            ..default()
+        },
+        Transform::from_xyz(-100.0, -50.0, 1.0),
     ));
 
     // Flower stem (green rectangle)
