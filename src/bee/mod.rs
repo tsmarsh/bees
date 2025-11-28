@@ -2,11 +2,13 @@ mod allergy;
 mod collection;
 mod components;
 mod movement;
+mod sneeze;
 
 pub use allergy::*;
 pub use collection::*;
 pub use components::*;
 pub use movement::*;
+pub use sneeze::*;
 
 use bevy::prelude::*;
 
@@ -28,6 +30,8 @@ impl Plugin for BeePlugin {
                     move_toward_target,
                     collect_pollen,
                     update_allergy_from_proximity,
+                    trigger_sneeze,
+                    update_sneezing,
                 )
                     .chain()
                     .run_if(in_state(GameState::Playing)),

@@ -40,6 +40,7 @@ fn setup_scene(mut commands: Commands) {
             ..default()
         },
         MoveTarget::default(),
+        SneezeCount::default(),
         Sprite {
             color: Color::srgb(1.0, 0.9, 0.2),
             custom_size: Some(Vec2::new(30.0, 30.0)),
