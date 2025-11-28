@@ -14,8 +14,11 @@ pub struct PollenCounter;
 #[derive(Component)]
 pub struct DangerVignette;
 
+// Minimum touch target size (Apple HIG recommends 44x44)
+const MIN_TOUCH_TARGET: f32 = 44.0;
+
 pub fn setup_ui(mut commands: Commands) {
-    // Allergy meter background
+    // Allergy meter background - sized for visibility and touch
     commands
         .spawn((
             AllergyMeterBar,
@@ -24,7 +27,8 @@ pub fn setup_ui(mut commands: Commands) {
                 left: Val::Px(20.0),
                 top: Val::Px(20.0),
                 width: Val::Px(200.0),
-                height: Val::Px(20.0),
+                height: Val::Px(24.0), // Slightly larger for visibility
+                min_height: Val::Px(MIN_TOUCH_TARGET), // Touch target padding
                 ..default()
             },
             BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.8)),

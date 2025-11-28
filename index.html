@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>Allerbees</title>
     <style>
         html, body {
@@ -12,11 +15,22 @@
             height: 100%;
             overflow: hidden;
             background-color: #1a1a2e;
+            /* Prevent pull-to-refresh and other mobile gestures */
+            overscroll-behavior: none;
+            /* Safe area for notched devices */
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
         }
         #bevy-canvas {
             width: 100%;
             height: 100%;
             display: block;
+            /* Prevent default touch behaviors on canvas */
+            touch-action: none;
+            /* Prevent text selection */
+            -webkit-user-select: none;
+            user-select: none;
+            /* Prevent callout on long-press (iOS) */
+            -webkit-touch-callout: none;
         }
     </style>
     <link data-trunk rel="rust" data-wasm-opt="z" />
