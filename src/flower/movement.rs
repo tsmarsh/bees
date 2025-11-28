@@ -1,19 +1,59 @@
 use bevy::prelude::*;
 
-use super::{FlowerHead, MovementPattern};
+use super::{FlowerHead, MovementPattern, RizzBehavior};
+
+/// Lazy movement parameters for blissed heads
+const BLISS_RADIUS: f32 = 20.0;
+const BLISS_SPEED: f32 = 0.3;
 
 pub fn update_flower_head_movement(
-    mut heads: Query<(&mut Transform, &mut FlowerHead)>,
+    mut heads: Query<(&mut Transform, &mut FlowerHead, Option<&RizzBehavior>)>,
     time: Res<Time>,
 ) {
-    for (mut transform, mut head) in &mut heads {
+    for (mut transform, mut head, behavior) in &mut heads {
         let delta = time.delta_secs();
-        let offset = calculate_pattern_offset(&mut head.movement_pattern, delta);
 
-        // Apply offset relative to local position (head is parented to flower stem)
-        transform.translation.x = offset.x;
-        transform.translation.y = offset.y;
+        match behavior {
+            Some(RizzBehavior::Pursuing) => {
+                // Movement handled by pursue_bee system, skip here
+                // But still update the pattern timer so it's smooth when returning to normal
+                let _ = calculate_pattern_offset(&mut head.movement_pattern, delta);
+            }
+            Some(RizzBehavior::Blissed) => {
+                // Lazy, predictable circular movement
+                let offset = calculate_blissed_movement(&mut head.movement_pattern, delta);
+                transform.translation.x = offset.x;
+                transform.translation.y = offset.y;
+            }
+            _ => {
+                // Normal movement pattern
+                let offset = calculate_pattern_offset(&mut head.movement_pattern, delta);
+                transform.translation.x = offset.x;
+                transform.translation.y = offset.y;
+            }
+        }
     }
+}
+
+/// Slow, predictable circular movement for blissed heads
+fn calculate_blissed_movement(pattern: &mut MovementPattern, delta: f32) -> Vec2 {
+    // Extract current angle or use pattern's internal state
+    let angle = match pattern {
+        MovementPattern::Circular { angle, .. } => angle,
+        MovementPattern::Figure8 { t, .. } => t,
+        MovementPattern::Sway { offset, .. } => offset,
+    };
+
+    *angle += BLISS_SPEED * delta;
+    if *angle > std::f32::consts::TAU {
+        *angle -= std::f32::consts::TAU;
+    }
+
+    // Simple lazy circle at base height
+    Vec2::new(
+        angle.cos() * BLISS_RADIUS,
+        angle.sin() * BLISS_RADIUS + 120.0,
+    )
 }
 
 fn calculate_pattern_offset(pattern: &mut MovementPattern, delta: f32) -> Vec2 {
