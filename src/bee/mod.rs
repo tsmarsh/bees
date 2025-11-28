@@ -1,6 +1,8 @@
+mod collection;
 mod components;
 mod movement;
 
+pub use collection::*;
 pub use components::*;
 pub use movement::*;
 
@@ -19,7 +21,7 @@ impl Plugin for BeePlugin {
             .register_type::<MoveTarget>()
             .add_systems(
                 Update,
-                (handle_click_input, move_toward_target)
+                (handle_click_input, move_toward_target, collect_pollen)
                     .chain()
                     .run_if(in_state(GameState::Playing)),
             );
