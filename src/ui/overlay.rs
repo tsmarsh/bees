@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::game::GameState;
+use crate::game::{GameState, SessionTimer};
 
 #[derive(Component)]
 pub struct GameOverlay;
@@ -38,6 +38,7 @@ pub fn setup_overlay(mut commands: Commands) {
 
 pub fn update_overlay_visibility(
     state: Res<State<GameState>>,
+    timer: Res<SessionTimer>,
     mut overlay: Query<&mut Visibility, With<GameOverlay>>,
     mut text: Query<&mut Text, With<OverlayText>>,
 ) {
@@ -55,11 +56,17 @@ pub fn update_overlay_visibility(
         }
         GameState::Won => {
             *visibility = Visibility::Visible;
-            **text = "You Win!\n\nClick to restart".to_string();
+            **text = format!(
+                "You Win!\n\nTime: {}\n\nClick to restart",
+                timer.formatted()
+            );
         }
         GameState::Lost => {
             *visibility = Visibility::Visible;
-            **text = "Game Over!\n\nClick to restart".to_string();
+            **text = format!(
+                "Game Over!\n\nTime: {}\n\nClick to restart",
+                timer.formatted()
+            );
         }
     }
 }
