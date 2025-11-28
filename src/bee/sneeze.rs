@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use super::{AllergyMeter, Bee, CollectedPollen, MoveTarget};
+use crate::effects::ScatteringPollen;
 use crate::flower::PollenBundle;
 use crate::game::GameConfig;
 
@@ -42,12 +43,16 @@ pub fn trigger_sneeze(
             // Drop pollen
             let dropped_count = collected.drop_percentage(config.sneeze.drop_percent);
 
-            // Spawn dropped pollen around the bee
+            // Spawn dropped pollen around the bee with scatter velocity
             let bee_pos = transform.translation.truncate();
             for i in 0..dropped_count {
                 let angle = (i as f32 / dropped_count as f32) * std::f32::consts::TAU;
-                let offset = Vec2::new(angle.cos(), angle.sin()) * 30.0;
+                let direction = Vec2::new(angle.cos(), angle.sin());
+                let offset = direction * 30.0;
                 let pos = bee_pos + offset;
+
+                // Scatter outward with some speed variation
+                let scatter_speed = 100.0 + (i as f32 * 15.0);
 
                 commands.spawn((
                     PollenBundle {
@@ -58,6 +63,10 @@ pub fn trigger_sneeze(
                         color: Color::srgb(1.0, 0.85, 0.0),
                         custom_size: Some(Vec2::splat(10.0)),
                         ..default()
+                    },
+                    ScatteringPollen {
+                        velocity: direction * scatter_speed,
+                        friction: 0.85,
                     },
                 ));
             }
