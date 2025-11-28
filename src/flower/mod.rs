@@ -1,8 +1,10 @@
 mod components;
 mod movement;
+mod pollen;
 
 pub use components::*;
 pub use movement::*;
+pub use pollen::*;
 
 use bevy::prelude::*;
 
@@ -19,7 +21,9 @@ impl Plugin for FlowerPlugin {
             .register_type::<PollenCache>()
             .add_systems(
                 Update,
-                update_flower_head_movement.run_if(in_state(GameState::Playing)),
+                (update_flower_head_movement, spawn_pollen_from_heads)
+                    .chain()
+                    .run_if(in_state(GameState::Playing)),
             );
     }
 }
