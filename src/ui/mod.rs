@@ -17,6 +17,8 @@ impl Plugin for UiPlugin {
                     update_allergy_meter_display,
                     update_pollen_counter,
                     update_overlay_visibility,
+                    update_bee_allergy_tint,
+                    update_danger_vignette,
                 ),
             );
     }
