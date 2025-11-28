@@ -1,3 +1,4 @@
+use allerbees::prelude::*;
 use bevy::prelude::*;
 
 fn main() {
@@ -12,6 +13,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins((GamePlugin, BeePlugin, FlowerPlugin))
         .insert_resource(ClearColor(Color::srgb(0.4, 0.6, 0.4)))
         .run();
 }
