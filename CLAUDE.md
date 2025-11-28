@@ -452,6 +452,121 @@ Example:
 
 ---
 
+## Current State (MVP Complete)
+
+The MVP is fully implemented and deployed. All 23 moth issues are complete.
+
+### Live Demo
+**https://tsmarsh.github.io/bees/**
+
+### What's Implemented
+
+#### Core Gameplay
+- **Player bee** - Yellow, click-to-move, collects pollen
+- **3-head flower** - Each head has independent movement pattern (circular, sway, figure-8)
+- **Pollen drops** - Fall from flower heads, worth 1 pollen each
+- **Stem caches** - 3 fixed positions on stem, worth 5 pollen, respawn after 10s
+- **Win condition** - Collect 20 pollen
+- **Lose condition** - 3 sneezes OR allergy meter hits 100
+
+#### Allergy/Sneeze System
+- Allergy builds when near flower heads (proximity-based)
+- Allergy decays when far from heads
+- At 80% allergy, bee sneezes and drops 25% of collected pollen
+- Visual feedback: meter color (green/yellow/red), bee tint, screen vignette
+
+#### Rizz System
+- Each flower head has rizz meter (0-100)
+- Rizz decays at 5/second
+- Low rizz (<30): head pursues nearest bee
+- High rizz (>70): head moves in lazy predictable circles ("blissed out")
+- **Wiggle action** (spacebar/right-click): builds rizz on nearby heads, 2s cooldown
+- **Tickle mechanic**: collecting stem cache drops nearest head's rizz by 30, head snaps to cache location
+
+#### AI Companions
+- **AI Diva** (purple) - Positions near heads, wiggles when any head's rizz < 50
+- **AI Healer** (green) - Moves toward player when allergy > 60%, heals 20/sec when adjacent, has 2x allergy sensitivity
+
+#### Juice/Effects
+- Sneeze: bee expansion animation, pollen scatters outward, screen shake, "ACHOO!" text
+- Collection: particle burst
+- Session timer displayed, shown on end screen
+
+### Architecture Overview
+
+```
+src/
+├── main.rs           # Scene setup, plugin registration
+├── lib.rs            # Module exports, prelude
+├── ai/
+│   ├── mod.rs        # AiPlugin
+│   ├── diva.rs       # AI Diva movement and wiggle logic
+│   └── healer.rs     # AI Healer movement and healing
+├── bee/
+│   ├── mod.rs        # BeePlugin
+│   ├── actions.rs    # Wiggle action (Wiggling, WiggleCooldown)
+│   ├── allergy.rs    # Proximity-based allergy buildup
+│   ├── collection.rs # Pollen and cache collection
+│   ├── components.rs # Bee, AllergyMeter, CollectedPollen, BeeBundle
+│   ├── movement.rs   # Click-to-move (MoveTarget)
+│   └── sneeze.rs     # Sneeze trigger and animation (Sneezing, SneezeCount)
+├── effects/
+│   ├── mod.rs        # EffectsPlugin, CollectionEvent
+│   ├── particles.rs  # Collection particle effects
+│   └── sneeze.rs     # Sneeze effects (SneezeEvent, screen shake, ACHOO text)
+├── flower/
+│   ├── mod.rs        # FlowerPlugin
+│   ├── components.rs # Flower, FlowerHead, MovementPattern, Pollen, CacheSpawnPoint
+│   ├── movement.rs   # Head movement patterns, rizz-based behavior
+│   ├── pollen.rs     # Pollen spawning, cache respawn
+│   └── rizz.rs       # Rizz system (RizzBehavior, TickleEvent, AttentionSnap)
+├── game/
+│   ├── mod.rs        # GamePlugin
+│   ├── conditions.rs # Win/lose checks
+│   ├── config.rs     # GameConfig with tunable values
+│   ├── reset.rs      # Game state reset on restart
+│   ├── state.rs      # GameState enum (Playing, Won, Lost)
+│   └── timer.rs      # Session timer
+└── ui/
+    ├── mod.rs        # UiPlugin
+    ├── meters.rs     # Allergy bar, pollen counter, danger vignette
+    └── overlay.rs    # Win/lose overlay with timer
+```
+
+### Key Technical Details
+
+#### Bevy Version
+Using Bevy 0.15 with wayland feature for Linux support.
+
+#### WASM Setup
+- Uses `trunk` for building/serving
+- `getrandom` with `wasm_js` feature for WASM compatibility
+- `web-sys` for console logging in WASM
+- `.cargo/config.toml` sets getrandom backend for wasm32
+
+#### CI/CD
+- GitHub Actions runs fmt, clippy, test, and WASM build
+- Requires Linux dependencies: `libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev`
+- Deploys to GitHub Pages on push to main
+
+#### Common Patterns
+- Components use `#[derive(Component, Debug, Clone, Reflect)]` for inspector support
+- Systems with complex Query types use `#[allow(clippy::type_complexity)]`
+- Events for cross-system communication (CollectionEvent, SneezeEvent, TickleEvent)
+- Timer-based animations (Sneezing, Wiggling, AttentionSnap)
+
+### What's NOT Implemented (Post-MVP)
+- Real art (currently placeholder colored shapes)
+- Sound/music
+- Crafting system
+- Hive base building
+- Multiplayer
+- Multiple bee types/roles
+- More flower types
+- Difficulty progression
+
+---
+
 ## Quick Reference
 
 ### Build & Run
