@@ -7,6 +7,22 @@ const RIZZ_DECAY_RATE: f32 = 5.0;
 const LOW_RIZZ_THRESHOLD: f32 = 30.0;
 const HIGH_RIZZ_THRESHOLD: f32 = 70.0;
 const PURSUIT_SPEED: f32 = 80.0;
+const TICKLE_RIZZ_DROP: f32 = 30.0;
+const ATTENTION_SNAP_DURATION: f32 = 1.0;
+const ATTENTION_SNAP_SPEED: f32 = 150.0;
+
+/// Event sent when a cache is collected (tickle)
+#[derive(Event)]
+pub struct TickleEvent {
+    pub cache_position: Vec2,
+}
+
+/// Component for attention snap - head moves to tickle location
+#[derive(Component)]
+pub struct AttentionSnap {
+    pub target: Vec2,
+    pub timer: Timer,
+}
 
 /// Component to track a flower head's current behavior state
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -148,6 +164,64 @@ pub fn update_rizz_meters(
             };
             sprite.color = color;
         }
+    }
+}
+
+/// Handle tickle events - drop rizz on nearest head and trigger attention snap
+pub fn handle_tickle_event(
+    mut commands: Commands,
+    mut events: EventReader<TickleEvent>,
+    mut heads: Query<(Entity, &GlobalTransform, &mut FlowerHead)>,
+) {
+    for event in events.read() {
+        // Find nearest head to cache
+        let nearest_head = heads
+            .iter_mut()
+            .map(|(entity, gt, head)| {
+                let dist = gt.translation().truncate().distance(event.cache_position);
+                (entity, dist, head)
+            })
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        if let Some((entity, _dist, mut head)) = nearest_head {
+            // Drop rizz
+            head.rizz = (head.rizz - TICKLE_RIZZ_DROP).max(0.0);
+
+            // Add attention snap
+            commands.entity(entity).insert(AttentionSnap {
+                target: event.cache_position,
+                timer: Timer::from_seconds(ATTENTION_SNAP_DURATION, TimerMode::Once),
+            });
+        }
+    }
+}
+
+/// Update attention snap - move head toward tickle location
+pub fn update_attention_snap(
+    mut commands: Commands,
+    mut heads: Query<
+        (Entity, &GlobalTransform, &mut Transform, &mut AttentionSnap),
+        With<FlowerHead>,
+    >,
+    time: Res<Time>,
+) {
+    let delta = time.delta_secs();
+
+    for (entity, global_transform, mut local_transform, mut snap) in &mut heads {
+        snap.timer.tick(time.delta());
+
+        if snap.timer.finished() {
+            commands.entity(entity).remove::<AttentionSnap>();
+            continue;
+        }
+
+        // Move toward target location
+        let current_pos = global_transform.translation().truncate();
+        let direction = (snap.target - current_pos).normalize_or_zero();
+        let movement = direction * ATTENTION_SNAP_SPEED * delta;
+
+        local_transform.translation.x += movement.x;
+        local_transform.translation.y += movement.y;
     }
 }
 

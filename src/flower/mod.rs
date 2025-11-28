@@ -21,11 +21,14 @@ impl Plugin for FlowerPlugin {
             .register_type::<MovementPattern>()
             .register_type::<Pollen>()
             .register_type::<PollenCache>()
+            .add_event::<TickleEvent>()
             .add_systems(
                 Update,
                 (
                     decay_rizz,
                     update_rizz_behavior,
+                    handle_tickle_event,
+                    update_attention_snap,
                     update_flower_head_movement,
                     pursue_bee,
                     spawn_pollen_from_heads,
