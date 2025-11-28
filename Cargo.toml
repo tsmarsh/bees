@@ -1,0 +1,28 @@
+[package]
+name = "allerbees"
+version = "0.1.0"
+edition = "2021"
+description = "A non-violent, cozy MMO-lite where bees collect pollen from flowers who love them too much"
+license = "MIT"
+
+[dependencies]
+bevy = { version = "0.15", features = ["wayland"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "thin"
