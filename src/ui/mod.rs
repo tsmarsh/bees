@@ -13,7 +13,11 @@ impl Plugin for UiPlugin {
         app.add_systems(Startup, (setup_ui, setup_overlay))
             .add_systems(
                 Update,
-                (update_allergy_meter_display, update_overlay_visibility),
+                (
+                    update_allergy_meter_display,
+                    update_pollen_counter,
+                    update_overlay_visibility,
+                ),
             );
     }
 }
