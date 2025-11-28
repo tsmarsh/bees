@@ -13,7 +13,7 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins((GamePlugin, BeePlugin, FlowerPlugin))
+        .add_plugins((GamePlugin, BeePlugin, FlowerPlugin, UiPlugin))
         .insert_resource(ClearColor(Color::srgb(0.4, 0.6, 0.4)))
         .add_systems(Startup, setup_scene)
         .run();
