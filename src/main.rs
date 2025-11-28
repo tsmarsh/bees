@@ -39,6 +39,7 @@ fn setup_scene(mut commands: Commands) {
             transform: Transform::from_xyz(-200.0, 0.0, 1.0),
             ..default()
         },
+        MoveTarget::default(),
         Sprite {
             color: Color::srgb(1.0, 0.9, 0.2),
             custom_size: Some(Vec2::new(30.0, 30.0)),
