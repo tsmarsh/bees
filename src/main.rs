@@ -13,7 +13,14 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins((GamePlugin, BeePlugin, FlowerPlugin, UiPlugin, EffectsPlugin))
+        .add_plugins((
+            GamePlugin,
+            BeePlugin,
+            FlowerPlugin,
+            UiPlugin,
+            EffectsPlugin,
+            AiPlugin,
+        ))
         .insert_resource(ClearColor(Color::srgb(0.4, 0.6, 0.4)))
         .add_systems(Startup, setup_scene)
         .run();
@@ -33,7 +40,7 @@ fn setup_scene(mut commands: Commands) {
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
-    // Bee (yellow circle placeholder)
+    // Player Bee (yellow circle placeholder)
     commands.spawn((
         BeeBundle {
             transform: Transform::from_xyz(-200.0, 0.0, 1.0),
@@ -46,6 +53,17 @@ fn setup_scene(mut commands: Commands) {
             custom_size: Some(Vec2::new(30.0, 30.0)),
             ..default()
         },
+    ));
+
+    // AI Diva Companion (purple/pink color)
+    commands.spawn((
+        AiDivaBundle::default(),
+        Sprite {
+            color: Color::srgb(0.8, 0.4, 0.7),
+            custom_size: Some(Vec2::new(28.0, 28.0)),
+            ..default()
+        },
+        Transform::from_xyz(-150.0, 50.0, 1.0),
     ));
 
     // Flower stem (green rectangle)
