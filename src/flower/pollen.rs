@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use super::{FlowerHead, Pollen, PollenBundle};
+use super::{CacheSpawnPoint, FlowerHead, Pollen, PollenBundle};
 
 const MAX_POLLEN_COUNT: usize = 100;
 const POLLEN_SIZE: f32 = 10.0;
@@ -36,6 +36,22 @@ pub fn spawn_pollen_from_heads(
                     ..default()
                 },
             ));
+        }
+    }
+}
+
+/// Respawn caches after their timer expires
+pub fn respawn_caches(mut caches: Query<(&mut CacheSpawnPoint, &mut Visibility)>, time: Res<Time>) {
+    for (mut cache, mut visibility) in &mut caches {
+        if cache.is_active {
+            continue;
+        }
+
+        cache.respawn_timer.tick(time.delta());
+
+        if cache.respawn_timer.finished() {
+            cache.is_active = true;
+            *visibility = Visibility::Visible;
         }
     }
 }

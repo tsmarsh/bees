@@ -63,6 +63,41 @@ fn setup_scene(mut commands: Commands) {
         ))
         .id();
 
+    // Stem caches (larger yellow circles with outline effect)
+    let cache_positions = [
+        Vec3::new(0.0, 30.0, 1.5), // Lower cache
+        Vec3::new(0.0, 60.0, 1.5), // Middle cache
+        Vec3::new(0.0, 90.0, 1.5), // Upper cache
+    ];
+
+    for pos in cache_positions {
+        // Cache outline (slightly larger, darker)
+        commands
+            .spawn((
+                Sprite {
+                    color: Color::srgb(0.7, 0.5, 0.0),
+                    custom_size: Some(Vec2::splat(26.0)),
+                    ..default()
+                },
+                Transform::from_translation(pos - Vec3::Z * 0.01),
+            ))
+            .set_parent(flower_entity);
+
+        // Cache fill (bright yellow)
+        commands
+            .spawn((
+                CacheSpawnPoint::default(),
+                Sprite {
+                    color: Color::srgb(1.0, 0.9, 0.2),
+                    custom_size: Some(Vec2::splat(22.0)),
+                    ..default()
+                },
+                Transform::from_translation(pos),
+                Visibility::Visible,
+            ))
+            .set_parent(flower_entity);
+    }
+
     // Flower head 1 - center (circular pattern)
     commands
         .spawn((

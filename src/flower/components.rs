@@ -103,6 +103,24 @@ impl Default for PollenCache {
     }
 }
 
+/// Marker for cache spawn points on the stem
+#[derive(Component, Debug, Clone)]
+pub struct CacheSpawnPoint {
+    pub respawn_timer: Timer,
+    pub is_active: bool,
+    pub value: u32,
+}
+
+impl Default for CacheSpawnPoint {
+    fn default() -> Self {
+        Self {
+            respawn_timer: Timer::from_seconds(10.0, TimerMode::Once),
+            is_active: true,
+            value: 5,
+        }
+    }
+}
+
 #[derive(Bundle, Default)]
 pub struct FlowerBundle {
     pub flower: Flower,

@@ -21,7 +21,11 @@ impl Plugin for FlowerPlugin {
             .register_type::<PollenCache>()
             .add_systems(
                 Update,
-                (update_flower_head_movement, spawn_pollen_from_heads)
+                (
+                    update_flower_head_movement,
+                    spawn_pollen_from_heads,
+                    respawn_caches,
+                )
                     .chain()
                     .run_if(in_state(GameState::Playing)),
             );

@@ -29,6 +29,7 @@ impl Plugin for BeePlugin {
                     handle_click_input,
                     move_toward_target,
                     collect_pollen,
+                    collect_caches,
                     update_allergy_from_proximity,
                     trigger_sneeze,
                     update_sneezing,
