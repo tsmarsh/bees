@@ -21,11 +21,13 @@ and which of the brief's open questions it answered provisionally, is in [docs/d
 sim/allerbees/*.fib   the encounter simulation in fibber: the only place game rules live
 sim/wasm.fib          its exports (doubles only), built to web/sim.wasm by `make wasm`
 web/                  the game: vanilla ES modules, canvas 2D, no build step
+  art/                painted sprites for the bees and Sunny (see art/README.md)
   js/sim/             the wasm loader, a WASI shim, layout.js (the state array, slot by slot)
   js/views/           one file per role's game, plus the celebration
   js/game/            event diffing, toasts (voice.js), HUD, audio, the hive's saved state
   js/net/party.js     garden parties: PartyClient and RemoteSim (same interface as Sim)
 server/               static files + garden parties over a hand-written WebSocket (no dependencies)
+tools/cut-sprites.py  cuts a generated sprite sheet into web/art sprites
 tests/                node --test: the wasm boundary and a two-person party
 ```
 
@@ -65,7 +67,8 @@ Follow the user's global rules (vanilla, accessible, responsive, paperlike seman
 - Changes the player should hear about go through `Hud.toast` (an `aria-live` region). Keep them short, kind and specific
   about *who* caused what.
 - Every role is playable by keyboard; every sound has a visual twin.
-- Art is drawn with `web/js/draw/ink.js`: bold ink outlines, flat fills, paper grain. Placeholder, with a point of view.
+- Art is drawn with `web/js/draw/ink.js`: bold ink outlines, flat fills, paper grain. Bees and Sunny are painted sprites
+  (`web/art/`, made and cut as [art/README.md](art/README.md) describes) with procedural fallbacks; `?ink` shows the fallbacks.
 - Colours are CSS custom properties in `web/css/style.css`; canvas colours are the constants at the top of ink.js.
 
 ## Commit hygiene

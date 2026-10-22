@@ -19,6 +19,33 @@ export const POLLEN = "#f6d24a";
 
 export const ROLE_COLOURS = { 0: TOMATO, 1: TEAL, 2: HONEY_DEEP };
 
+// ---------------------------------------------------------------------------------------------------------------
+// Painted sprites (web/art, cut from OpenArt sheets by tools/cut-sprites.py; see art/README.md). Until one has
+// loaded, or with ?ink in the URL, everything below falls back to the procedural drawing.
+const ROLE_NAMES = { 0: "tank", 1: "healer", 2: "forager" };
+const SUNNY_MOODS = ["happy", "delighted", "curious", "worried", "sleepy"];
+const art = {};
+// Sprites in a sheet share one pixel scale: the happy bee is 360px tall and Sunny 701px, matched to r and R.
+const BEE_PX = 3.3 / 360;
+const SUNNY_PX = 3.3 / 701;
+
+function loadArt() {
+  if (typeof Image === "undefined" || new URLSearchParams(location.search).has("ink")) return;
+  const names = SUNNY_MOODS.map((m) => `sunny-${m}`);
+  for (const role of Object.values(ROLE_NAMES)) for (const s of ["happy", "sneezy", "resting"]) names.push(`bee-${role}-${s}`);
+  for (const name of names) {
+    const img = new Image();
+    img.src = new URL(`../../art/${name}.webp`, import.meta.url).href;
+    img.decode().then(() => { art[name] = img; }, () => {});
+  }
+}
+loadArt();
+
+function sprite(ctx, img, k) {
+  const w = img.width * k, h = img.height * k;
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+}
+
 let grain = null;
 function grainPattern(ctx) {
   if (grain) return grain;
@@ -163,14 +190,38 @@ export function bee(ctx, x, y, r, opts = {}) {
     ctx.fill();
   }
 
-  // wings, behind
+  // wings, behind (a painted bee's head is bigger, so its wings sit further back, over the stripes)
+  const painted = art[`bee-${ROLE_NAMES[role]}-happy`];
+  const wx = painted ? -r * 0.4 : 0;
   const flap = resting ? 0.2 : Math.sin(t * 38) * 0.5 + 0.5;
   ctx.save();
   ctx.globalAlpha *= 0.85;
-  ellipse(ctx, -r * 0.25, -r * 0.95, r * 0.55, r * (0.28 + 0.32 * flap), -0.5, "rgba(255,255,255,0.85)", lw * 0.7);
-  ellipse(ctx, r * 0.15, -r * 1.05, r * 0.5, r * (0.25 + 0.3 * flap), 0.35, "rgba(255,255,255,0.85)", lw * 0.7);
+  ellipse(ctx, wx - r * 0.25, -r * 0.95, r * 0.55, r * (0.28 + 0.32 * flap), -0.5, "rgba(255,255,255,0.85)", lw * 0.7);
+  ellipse(ctx, wx + r * 0.15, -r * 1.05, r * 0.5, r * (0.25 + 0.3 * flap), 0.35, "rgba(255,255,255,0.85)", lw * 0.7);
   ctx.restore();
 
+  if (painted) paintedBee(ctx, r, lw, painted, { role, t, sneezy, resting, load, wave });
+  else inkBee(ctx, r, lw, { role, t, sneezy, resting, load, wave, look, mouth });
+
+  ctx.restore();
+
+  if (resting) {
+    ctx.save();
+    ctx.globalAlpha = alpha * (0.6 + 0.4 * Math.sin(t * 2));
+    ctx.fillStyle = INK;
+    ctx.font = `700 ${Math.round(r * 0.7)}px Fraunces, Georgia, serif`;
+    ctx.fillText("z", x + r * 0.9, y - r * 1.3 - Math.sin(t * 2) * r * 0.2);
+    ctx.font = `700 ${Math.round(r * 0.5)}px Fraunces, Georgia, serif`;
+    ctx.fillText("z", x + r * 1.35, y - r * 1.8 - Math.sin(t * 2 + 1) * r * 0.2);
+    ctx.restore();
+  }
+  if (you) {
+    sparkle(ctx, x, y - r * 2.0 - Math.sin(t * 3) * r * 0.1, r * 0.35, "#fff1a8");
+  }
+}
+
+// The procedural bee under the wings: legs, arms, satchel, body, face and role props, in the bee's own frame.
+function inkBee(ctx, r, lw, { role, t, sneezy, resting, load, wave, look, mouth }) {
   // legs and rubber-hose arms
   ctx.lineWidth = lw;
   ctx.strokeStyle = INK;
@@ -290,20 +341,36 @@ export function bee(ctx, x, y, r, opts = {}) {
     circle(ctx, r * 0.48, -r * 0.82, r * 0.17, SKY, lw * 0.7);
   }
 
-  ctx.restore();
+}
 
-  if (resting) {
+// The painted bee: the role's sprite, cross-faded to its sneezy pose as allergy rises, or resting. Arms only appear
+// for a wave (the high-five), and a forager's satchel shows its load as a drop of honey.
+function paintedBee(ctx, r, lw, happy, { role, t, sneezy, resting, load, wave }) {
+  const k = r * BEE_PX;
+  const name = ROLE_NAMES[role];
+  if (resting && art[`bee-${name}-resting`]) {
+    sprite(ctx, art[`bee-${name}-resting`], k);
+    return;
+  }
+  sprite(ctx, happy, k);
+  const fade = Math.min(1, Math.max(0, (sneezy - 0.2) / 0.5));
+  if (fade > 0 && art[`bee-${name}-sneezy`]) {
     ctx.save();
-    ctx.globalAlpha = alpha * (0.6 + 0.4 * Math.sin(t * 2));
-    ctx.fillStyle = INK;
-    ctx.font = `700 ${Math.round(r * 0.7)}px Fraunces, Georgia, serif`;
-    ctx.fillText("z", x + r * 0.9, y - r * 1.3 - Math.sin(t * 2) * r * 0.2);
-    ctx.font = `700 ${Math.round(r * 0.5)}px Fraunces, Georgia, serif`;
-    ctx.fillText("z", x + r * 1.35, y - r * 1.8 - Math.sin(t * 2 + 1) * r * 0.2);
+    ctx.globalAlpha *= fade;
+    sprite(ctx, art[`bee-${name}-sneezy`], k);
     ctx.restore();
   }
-  if (you) {
-    sparkle(ctx, x, y - r * 2.0 - Math.sin(t * 3) * r * 0.1, r * 0.35, "#fff1a8");
+  if (role === 2 && load > 0.05) nectarDrop(ctx, -r * 0.5, r * 0.62 - r * 0.1 * load, r * (0.12 + 0.12 * load), load > 0.95);
+  if (wave > 0) {
+    const armUp = wave * r * 1.2;
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = INK;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(r * 0.3, r * 0.75);
+    ctx.quadraticCurveTo(r * 1.5, r * 0.85, r * 1.4, r * 0.45 - armUp);
+    ctx.stroke();
+    circle(ctx, r * 1.4, r * 0.45 - armUp, r * 0.2, "#fff", lw * 0.8);
   }
 }
 
@@ -362,6 +429,15 @@ export function sunflower(ctx, x, y, R, opts = {}) {
   ctx.rotate(lean * 0.35 + Math.sin(t * 0.9) * 0.03);
   const bounce = 1 + delight * 0.06 * Math.sin(t * 18);
   ctx.scale(bounce, 1 / bounce);
+
+  // painted head: one sprite per mood, with a delighted wiggle and a hug that draws the petals in
+  const face = art[`sunny-${sunnyMood(mood, delight, blink)}`];
+  if (face) {
+    ctx.rotate(delight * 0.05 * Math.sin(t * 9));
+    sprite(ctx, face, R * SUNNY_PX * (1 - hug * 0.12));
+    ctx.restore();
+    return;
+  }
 
   // petals: two rings
   const n = 18;
@@ -454,6 +530,13 @@ export function sunflower(ctx, x, y, R, opts = {}) {
     ctx.stroke();
   }
   ctx.restore();
+}
+
+function sunnyMood(mood, delight, blink) {
+  if (blink || mood === "sleepy") return "sleepy";
+  if (delight > 0.6 || mood === "bubbly") return "delighted";
+  if (mood === "worried" || mood === "curious") return mood;
+  return "happy";
 }
 
 export function leaf(ctx, x, y, len, angle, lw) {
