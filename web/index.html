@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f3e7cf">
+  <meta name="description" content="Five little bees. Three completely different games. One very affectionate garden.">
+  <title>Allerbees</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..900,100,1&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cellipse cx='32' cy='34' rx='22' ry='18' fill='%23f2b62c' stroke='%23221c16' stroke-width='4'/%3E%3Cpath d='M24 18v32M38 17v34' stroke='%23221c16' stroke-width='6'/%3E%3C/svg%3E">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to the game</a>
+
+  <main id="main">
+    <!-- The hive: choose a role, spend the communal pot, start a visit -->
+    <section id="screen-hive" class="screen hive" aria-labelledby="hive-title" hidden>
+      <header class="hive-masthead">
+        <p class="kicker">A cooperative garden game</p>
+        <h1 id="hive-title" tabindex="-1">Allerbees</h1>
+        <p class="tagline">Five little bees. Three completely different games. One very affectionate garden.</p>
+      </header>
+
+      <div class="hive-columns">
+        <form id="visit-form" class="visit-form" aria-labelledby="visit-heading">
+          <h2 id="visit-heading">Visit Sunny the sunflower</h2>
+          <p class="flower-note" id="flower-note">Sunny has never met you. She is very excited.</p>
+
+          <fieldset class="roles">
+            <legend>How would you like to help?</legend>
+            <label class="role-card role-tank">
+              <input type="radio" name="role" value="0">
+              <span class="role-name">Tank <span class="role-sub">the performer</span></span>
+              <span class="role-blurb">Keep Sunny delighted with dances and belly rubs, so she leaves the foragers room to fly. Tap, hold and trace in time.</span>
+            </label>
+            <label class="role-card role-forager">
+              <input type="radio" name="role" value="2" checked>
+              <span class="role-name">Forager <span class="role-sub">the flyer</span></span>
+              <span class="role-blurb">Fly the line through the petals and fill your satchel. Tap to turn. Heavy satchels turn slowly, so take nectar home when it feels right.</span>
+            </label>
+            <label class="role-card role-healer">
+              <input type="radio" name="role" value="1">
+              <span class="role-name">Healer <span class="role-sub">the salve launcher</span></span>
+              <span class="role-blurb">Pull back and lob honey salves to bees who are getting sneezy. Salves soothe, protect and speed recovery.</span>
+            </label>
+          </fieldset>
+
+          <fieldset class="party">
+            <legend>Foragers on this visit</legend>
+            <label><input type="radio" name="foragers" value="1"> One</label>
+            <label><input type="radio" name="foragers" value="2"> Two</label>
+            <label><input type="radio" name="foragers" value="3" checked> Three</label>
+          </fieldset>
+          <p class="fine">Friendly NPC bees fill every role you don't play.</p>
+
+          <div class="actions">
+            <button type="submit" class="button primary" id="start-visit">Fly to Sunny</button>
+            <button type="button" class="button quiet" id="sound-toggle" aria-pressed="true">Sound on</button>
+          </div>
+          <p class="fine" id="loading-note" role="status"></p>
+        </form>
+
+        <aside class="pantry" aria-labelledby="pantry-heading">
+          <h2 id="pantry-heading">The hive pantry</h2>
+          <p class="pot"><span class="pot-number" id="pantry-total">0</span> <span class="pot-unit">drops of nectar, shared by everyone</span></p>
+          <h3>Things hive mates can make you</h3>
+          <ul class="gear-list" id="gear-list"></ul>
+          <details class="how">
+            <summary>How the three games fit together</summary>
+            <p>Everyone plays the same visit, but in a different game. When the tank keeps Sunny delighted, the foragers' paths grow wide. When foragers bring nectar home, the healer gets honey for more salves. When the healer's salves land, the tank's timing gets easier and the foragers can keep flying.</p>
+            <p>Nobody gets hurt, ever. A bee who gets too sneezy rests on a leaf for a moment, and the nectar you carry home always counts.</p>
+          </details>
+        </aside>
+      </div>
+    </section>
+
+    <!-- A visit: one role's game in the canvas, the shared team state around it -->
+    <section id="screen-visit" class="screen visit" aria-labelledby="visit-title" hidden>
+      <h1 id="visit-title" class="visually-hidden" tabindex="-1">Visiting Sunny</h1>
+      <div class="hud-top">
+        <div class="sun" aria-hidden="true"><span class="sun-dot" id="sun-dot"></span></div>
+        <p class="time-left" id="time-left">2:30 left</p>
+        <p class="phase-chip" id="phase-chip">Sunny is calm</p>
+        <p class="hud-pot"><span class="visually-hidden">Nectar home:</span><span id="hud-bank">0</span></p>
+        <button type="button" class="button tiny" id="pause-button" aria-haspopup="dialog">Pause</button>
+      </div>
+      <ol class="team" id="team" aria-label="Your team"></ol>
+      <div class="stage" id="stage">
+        <canvas id="canvas" aria-describedby="role-help"></canvas>
+        <p class="role-help visually-hidden" id="role-help"></p>
+      </div>
+      <div class="hud-role" id="hud-role"></div>
+      <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+    </section>
+
+    <!-- After the visit -->
+    <section id="screen-celebrate" class="screen celebrate" aria-labelledby="celebrate-title" hidden>
+      <h1 id="celebrate-title" tabindex="-1">Look what we did together!</h1>
+      <canvas id="celebrate-canvas" class="celebrate-canvas" aria-hidden="true"></canvas>
+      <p class="pot big"><span class="pot-number" id="celebrate-bank">0</span> <span class="pot-unit">drops of nectar carried home</span></p>
+      <p class="flower-says" id="flower-says"></p>
+      <ul class="thanks" id="thanks"></ul>
+      <p class="private-note" id="private-note"></p>
+      <div class="actions">
+        <button type="button" class="button primary" id="high-five">High five!</button>
+        <button type="button" class="button" id="visit-again">Visit Sunny again</button>
+        <button type="button" class="button quiet" id="back-to-hive">Back to the hive</button>
+      </div>
+      <p class="visually-hidden" role="status" id="celebrate-status"></p>
+    </section>
+  </main>
+
+  <dialog id="pause-dialog" aria-labelledby="pause-title">
+    <h2 id="pause-title">Taking a breather</h2>
+    <p>The garden waits for you. Everyone's nectar is safe.</p>
+    <div class="actions">
+      <button type="button" class="button primary" id="resume" autofocus>Keep playing</button>
+      <button type="button" class="button" id="head-home">Head home together</button>
+    </div>
+  </dialog>
+
+  <noscript><p class="noscript">Allerbees needs JavaScript and WebAssembly to run.</p></noscript>
+</body>
+</html>
