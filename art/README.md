@@ -25,9 +25,11 @@ shadows, no other objects, no text", which is what the cutter needs.
 
 ## Cutting a sheet
 
+The cutter is a fibber program that links zlib and libwebp (`libwebp.so.7`); build it with `make tools/cut-sprites`.
+
 ```
-python3 -I tools/cut-sprites.py SHEET.png web/art/bee-healer happy sneezy resting --size 360
-python3 -I tools/cut-sprites.py SHEET.png web/art/sunny happy delighted curious worried sleepy --size 720
+tools/cut-sprites SHEET.png web/art/bee-healer happy sneezy resting --size 360
+tools/cut-sprites SHEET.png web/art/sunny happy delighted curious worried sleepy --size 720
 ```
 
 Figures are read in rows, left to right, and named in that order. One scale applies to the whole sheet, so a character

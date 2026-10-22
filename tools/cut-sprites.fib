@@ -1,0 +1,365 @@
+;; Cut a generated sprite sheet into transparent sprites, one per figure.
+;;
+;; The sheets are drawn on a flat white background. Background is whatever near-white region touches the sheet's edge
+;; (so white eyes and highlights inside an ink outline survive). Figures are the big connected regions, read in rows
+;; (top to bottom, then left to right); small regions (a tear drop, a loose antenna tip) join the figure they touch.
+;; Each figure is saved as OUT_PREFIX-NAME.webp (or --ext png) with only its own pixels, so a neighbour's petals never leak in.
+;;
+;;     make tools/cut-sprites
+;;     tools/cut-sprites SHEET.png OUT_PREFIX name1 name2 ... [--size 256] [--ext png] [--tolerance 28] [--gap 24]
+;;
+;; Reads 8-bit RGB or RGBA PNGs. zlib inflates the sheet and deflates a PNG; libwebp encodes the WebP (quality 90).
+(ns main (:require [Math :as Math] [fib.math :as math] [fib.os :as os] [fib.os.native :as n]))
+
+(extern uncompress (ptr ptr ptr i64) -> i32 :lib "z")
+(extern compress2 (ptr ptr ptr i64 i32) -> i32 :lib "z")
+(extern compressBound (i64) -> i64 :lib "z")
+(extern crc32 (i64 ptr i32) -> i64 :lib "z")
+(extern WebPEncodeRGBA (ptr i32 i32 i32 f32 ptr) -> i64 :lib ":libwebp.so.7")
+(extern WebPFree (ptr) -> unit :lib ":libwebp.so.7")
+
+(def STEP 4) ; figures are found on a grid this coarse; the alpha edge itself stays full resolution
+(def PAD 8)
+(def PI 3.141592653589793)
+
+(defstruct Sheet (w: i64 h: i64 rgb: (Array i8)))
+(defstruct Region (id: i64 x0: i64 y0: i64 x1: i64 y1: i64 n: i64))
+(defstruct Grid (labels: (Array i64) regions: (Vec Region)))
+(defstruct Figures (owner: (Array i64) boxes: (Vec (Vec i64))))
+(defstruct Sprite (w: i64 h: i64 rgba: (Array i8)))
+(defstruct Opts (sheet: str prefix: str names: (Vec str) size: i64 ext: str tolerance: i64 gap: i64))
+
+(defun u8 (b: i8) -> i64 (zext i64 b))
+(defun clamp (x: i64 lo: i64 hi: i64) -> i64 (max lo (min hi x)))
+(defun round-u8 (x: f64) -> i64 (clamp (fptosi i64 (Math/floor (+ x 0.5))) 0 255))
+
+;; ---- PNG in -------------------------------------------------------------------------------------------------------
+
+(defun be32 (a: (Array i8) i: i64) -> i64
+  (bit-or (bit-shift-left (u8 (array-get a i)) 24)
+    (bit-or (bit-shift-left (u8 (array-get a (+ i 1))) 16)
+      (bit-or (bit-shift-left (u8 (array-get a (+ i 2))) 8) (u8 (array-get a (+ i 3)))))))
+
+(defun idat? (a: (Array i8) i: i64) -> bool
+  (and (= (array-get a (+ i 4)) 73i8) (= (array-get a (+ i 5)) 68i8) (= (array-get a (+ i 6)) 65i8) (= (array-get a (+ i 7)) 84i8)))
+
+(defun paeth (a: i64 b: i64 c: i64) -> i64
+  (let [p (- (+ a b) c) pa (Math/abs (- p a)) pb (Math/abs (- p b)) pc (Math/abs (- p c))]
+    (cond (and (<= pa pb) (<= pa pc)) a (<= pb pc) b :else c)))
+
+;; Undo the row filters of the inflated image `raw` (rows of 1 + w*bpp bytes) into an RGB sheet; for RGBA,
+;; a pixel less than half opaque counts as white background.
+(defun unfilter (raw: ptr w: i64 h: i64 bpp: i64) -> (Array i8)
+  (let [stride (* w bpp) rgb (cell (array (* w h 3) 0i8)) prev (cell (array stride 0)) cur (cell (array stride 0))]
+    (unsafe
+      (do
+        (dotimes (y h)
+          (let [row (ptr+ raw (* y (+ stride 1))) kind (u8 (load-i8 row))]
+            (do
+              (dotimes (i stride)
+                (let [x (u8 (load-i8 (ptr+ row (+ i 1))))
+                      a (if (>= i bpp) (array-get @cur (- i bpp)) 0)
+                      b (array-get @prev i)
+                      c (if (>= i bpp) (array-get @prev (- i bpp)) 0)
+                      pred (cond (= kind 0) 0 (= kind 1) a (= kind 2) b (= kind 3) (quot (+ a b) 2) :else (paeth a b c))]
+                  (array-set! &cur i (bit-and (+ x pred) 255))))
+              (dotimes (x w)
+                (let [o (* (+ (* y w) x) 3) opaque (or (= bpp 3) (>= (array-get @cur (+ (* x bpp) 3)) 128))]
+                  (dotimes (k 3) (array-set! &rgb (+ o k) (trunc i8 (if opaque (array-get @cur (+ (* x bpp) k)) 255))))))
+              (dotimes (i stride) (array-set! &prev i (array-get @cur i))))))
+        @rgb))))
+
+(defun read-png (path: str) -> (Result Sheet str)
+  (match (os/read-file-bytes path 268435456)
+    ((Err e) (Err (str path ": " (. e message))))
+    ((Ok a)
+      (if (or (< (array-len a) 33) (not= (be32 a 12) 1229472850)) (Err (str path ": not a PNG")) ; IHDR
+        (let [w (be32 a 16) h (be32 a 20) depth (u8 (array-get a 24)) colour (u8 (array-get a 25))
+              interlace (u8 (array-get a 28)) bpp (if (= colour 6) 4 3)]
+          (if (or (not= depth 8) (not (or (= colour 2) (= colour 6))) (not= interlace 0))
+            (Err (str path ": only 8-bit, non-interlaced RGB or RGBA PNGs"))
+            (let [idat (loop [i 8 n 0] (if (>= i (array-len a)) n
+                                         (recur (+ i 12 (be32 a i)) (if (idat? a i) (+ n (be32 a i)) n))))
+                  size (* h (+ 1 (* w bpp)))]
+              (unsafe
+                (let [src (alloc (max 1 idat)) dst (alloc size) len (alloc 8)]
+                  (do
+                    (loop [i 8 at 0]
+                      (when (< i (array-len a))
+                        (let [m (be32 a i)]
+                          (if (idat? a i)
+                            (do (dotimes (j m) (store-i8 (ptr+ src (+ at j)) (array-get a (+ i 8 j)))) (recur (+ i 12 m) (+ at m)))
+                            (recur (+ i 12 m) at)))))
+                    (store-i64 len size)
+                    (let [z (uncompress dst len src idat)
+                          out (if (and (= z 0i32) (= (load-i64 len) size)) (Ok (Sheet w h (unfilter dst w h bpp)))
+                                (Err (str path ": cannot inflate (zlib " z ")")))]
+                      (do (free src) (free dst) (free len) out))))))))))))
+
+;; ---- background and figures ---------------------------------------------------------------------------------------
+
+;; 1 where a pixel is near-white and connected to the border.
+(defun background-mask (s: Sheet tolerance: i64) -> (Array i8)
+  (let [w (. s w) h (. s h) rgb (. s rgb) lo (- 255 tolerance)
+        bg (cell (array (* w h) 0i8)) queue (cell (array (* w h) 0)) tail (cell 0)
+        white? (fn (i: i64) (and (>= (u8 (array-get rgb (* i 3))) lo) (>= (u8 (array-get rgb (+ (* i 3) 1))) lo)
+                                 (>= (u8 (array-get rgb (+ (* i 3) 2))) lo)))
+        push (fn (i: i64) (when (and (= (array-get @bg i) 0i8) (white? i))
+                            (do (array-set! &bg i 1i8) (array-set! &queue @tail i) (set! tail (+ @tail 1)))))]
+    (do
+      (dotimes (x w) (do (push x) (push (+ (* (- h 1) w) x))))
+      (dotimes (y h) (do (push (* y w)) (push (+ (* y w) (- w 1)))))
+      (loop [head 0]
+        (when (< head @tail)
+          (let [i (array-get @queue head) x (rem i w) y (quot i w)]
+            (do (when (> x 0) (push (- i 1))) (when (< x (- w 1)) (push (+ i 1)))
+                (when (> y 0) (push (- i w))) (when (< y (- h 1)) (push (+ i w)))
+                (recur (+ head 1))))))
+      @bg)))
+
+;; The alpha channel: opaque off the background, pulled in by a pixel and softened, so the ink outline doesn't sit on a
+;; hard white fringe (a 3x3 minimum, then a Gaussian of sigma 0.8).
+(defun soft-alpha (bg: (Array i8) w: i64 h: i64) -> (Array i8)
+  (let [mn (cell (array (* w h) 0i8)) tmp (cell (array (* w h) 0.0)) out (cell (array (* w h) 0i8))
+        bg? (fn (x: i64 y: i64) (= (array-get bg (+ (* (clamp y 0 (- h 1)) w) (clamp x 0 (- w 1)))) 1i8))
+        kernel (let [ws (mapv (fn (d: i64) (math/exp (/ (* -1.0 (double (* d d))) (* 2.0 0.64)))) (range -3 4))
+                     total (reduce + 0.0 ws)]
+                 (mapv (fn (x: f64) (/ x total)) ws))]
+    (do
+      (dotimes (y h)
+        (dotimes (x w)
+          (let [near (loop [dy -1 hit false]
+                       (if (or hit (> dy 1)) hit
+                         (recur (+ dy 1) (or (bg? (- x 1) (+ y dy)) (bg? x (+ y dy)) (bg? (+ x 1) (+ y dy))))))]
+            (array-set! &mn (+ (* y w) x) (if near 0i8 -1i8)))))
+      (dotimes (y h)
+        (dotimes (x w)
+          (array-set! &tmp (+ (* y w) x)
+            (loop [d -3 acc 0.0] (if (> d 3) acc
+              (recur (+ d 1) (+ acc (* (nth kernel (+ d 3)) (double (u8 (array-get @mn (+ (* y w) (clamp (+ x d) 0 (- w 1))))))))))))))
+      (dotimes (y h)
+        (dotimes (x w)
+          (array-set! &out (+ (* y w) x)
+            (trunc i8 (round-u8 (loop [d -3 acc 0.0] (if (> d 3) acc
+              (recur (+ d 1) (+ acc (* (nth kernel (+ d 3)) (array-get @tmp (+ (* (clamp (+ y d) 0 (- h 1)) w) x))))))))))))
+      @out)))
+
+;; Label the foreground on a coarse grid: a cell is foreground if any of its corners is.
+(defun label-regions (bg: (Array i8) w: i64 h: i64) -> Grid
+  (let [gw (quot w STEP) gh (quot h STEP)
+        fg (cell (array (* gw gh) 0i8)) labels (cell (array (* gw gh) 0)) queue (cell (array (* gw gh) 0))]
+    (do
+      (dotimes (gy gh)
+        (dotimes (gx gw)
+          (let [r (* gy STEP w) x (* gx STEP) q (+ r (* (- STEP 1) w))]
+            (when (not (and (= (array-get bg (+ r x)) 1i8) (= (array-get bg (+ r x (- STEP 1))) 1i8)
+                            (= (array-get bg (+ q x)) 1i8) (= (array-get bg (+ q x (- STEP 1))) 1i8)))
+              (array-set! &fg (+ (* gy gw) gx) 1i8)))))
+      (let [regions
+            (loop [start 0 regions []]
+              (cond
+                (>= start (* gw gh)) regions
+                (or (= (array-get @fg start) 0i8) (not= (array-get @labels start) 0)) (recur (+ start 1) regions)
+                :else
+                (let [id (+ (count regions) 1)
+                      take (fn (j: i64 t: i64) (if (and (>= j 0) (= (array-get @fg j) 1i8) (= (array-get @labels j) 0))
+                                                 (do (array-set! &labels j id) (array-set! &queue t j) (+ t 1)) t))]
+                  (do
+                    (array-set! &labels start id) (array-set! &queue 0 start)
+                    (let [r (loop [head 0 tail 1 x0 gw y0 gh x1 0 y1 0]
+                              (if (>= head tail) (Region id (* x0 STEP) (* y0 STEP) (* (+ x1 1) STEP) (* (+ y1 1) STEP) tail)
+                                (let [i (array-get @queue head) x (rem i gw) y (quot i gw)
+                                      t1 (take (if (< x (- gw 1)) (+ i 1) -1) tail)
+                                      t2 (take (if (> x 0) (- i 1) -1) t1)
+                                      t3 (take (if (< y (- gh 1)) (+ i gw) -1) t2)
+                                      t4 (take (if (> y 0) (- i gw) -1) t3)]
+                                  (recur (+ head 1) t4 (min x0 x) (min y0 y) (max x1 x) (max y1 y)))))]
+                      (recur (+ start 1) (conj regions r)))))))]
+        (Grid @labels regions)))))
+
+(defun touches? (b: (Vec i64) r: Region gap: i64) -> bool
+  (and (< (- (nth b 0) gap) (. r x1)) (< (- (. r x0) gap) (nth b 2)) (< (- (nth b 1) gap) (. r y1)) (< (- (. r y0) gap) (nth b 3))))
+
+;; Big regions are figures; each small one joins the first figure whose box it touches (or is dropped as a speck).
+;; `owner` maps a region id to its figure's index + 1; a box is x0 y0 x1 y1.
+(defun figures-of (regions: (Vec Region) gap: i64) -> Figures
+  (let [biggest (reduce max 0 (mapv (fn (r: Region) (. r n)) regions))
+        big? (fn (r: Region) (>= (* 100 (. r n)) (* 15 biggest)))
+        owner (cell (array (+ (count regions) 1) 0))
+        figures (reduce (fn (fs: (Vec (Vec i64)) r: Region)
+                          (if (big? r) (do (array-set! &owner (. r id) (+ (count fs) 1)) (conj fs [(. r x0) (. r y0) (. r x1) (. r y1)])) fs))
+                  [] regions)
+        boxes (reduce (fn (fs: (Vec (Vec i64)) r: Region)
+                        (if (or (big? r) (< (. r n) 4)) fs
+                          (match (first (filter (fn (k: i64) (touches? (nth fs k) r gap)) (range (count fs))))
+                            ((some k) (let [b (nth fs k)]
+                                        (do (array-set! &owner (. r id) (+ k 1))
+                                            (assoc fs k [(min (nth b 0) (. r x0)) (min (nth b 1) (. r y0)) (max (nth b 2) (. r x1)) (max (nth b 3) (. r y1))]))))
+                            (nil fs))))
+                figures regions)]
+    (Figures @owner boxes)))
+
+;; Figure indices in reading order: rows by centre height, then left to right.
+(defun reading-order (boxes: (Vec (Vec i64))) -> (Vec i64)
+  (let [cy (fn (k: i64) (quot (+ (nth (nth boxes k) 1) (nth (nth boxes k) 3)) 2))
+        half (fn (k: i64) (quot (- (nth (nth boxes k) 3) (nth (nth boxes k) 1)) 2))
+        by-y (sort-by cy (vec (range (count boxes))))
+        rows (reduce (fn (rows: (Vec (Vec i64)) k: i64)
+                       (let [row (nth rows (- (count rows) 1)) prev (nth row (- (count row) 1))]
+                         (if (< (- (cy k) (cy prev)) (half prev)) (assoc rows (- (count rows) 1) (conj row k)) (conj rows [k]))))
+               [[(nth by-y 0)]] (vec (drop 1 by-y)))]
+    (reduce (fn (acc: (Vec i64) row: (Vec i64)) (into acc (sort-by (fn (k: i64) (nth (nth boxes k) 0)) row))) [] rows)))
+
+;; ---- one sprite ---------------------------------------------------------------------------------------------------
+
+(defun lanczos (x: f64) -> f64
+  (cond (= x 0.0) 1.0 (>= (Math/abs x) 3.0) 0.0
+        :else (let [px (* PI x)] (/ (* 3.0 (math/sin px) (math/sin (/ px 3.0))) (* px px)))))
+
+;; Pillow's resampling: each output pixel averages the inputs under a Lanczos-3 window widened by the scale.
+;; Per output pixel: the first input it reads, then the weights.
+(defun weights (n-in: i64 n-out: i64) -> (Vec (Vec f64))
+  (let [scale (/ (double n-in) (double n-out)) support (* 3.0 (max scale 1.0))]
+    (mapv (fn (o: i64)
+            (let [centre (* (+ (double o) 0.5) scale)
+                  lo (max 0 (fptosi i64 (Math/floor (+ (- centre support) 0.5))))
+                  hi (min n-in (fptosi i64 (Math/floor (+ centre support 0.5))))
+                  ws (mapv (fn (i: i64) (lanczos (/ (- (+ (double i) 0.5) centre) (max scale 1.0)))) (range lo hi))
+                  total (reduce + 0.0 ws)]
+              (into [(double lo)] (mapv (fn (x: f64) (/ x total)) ws))))
+      (range n-out))))
+
+(defun resample (src: (Array f64) w: i64 h: i64 ow: i64 oh: i64) -> (Array f64)
+  (let [wx (weights w ow) wy (weights h oh) mid (cell (array (* ow h 4) 0.0)) out (cell (array (* ow oh 4) 0.0))]
+    (do
+      (dotimes (y h)
+        (dotimes (x ow)
+          (let [ws (nth wx x) lo (fptosi i64 (nth ws 0))]
+            (dotimes (c 4)
+              (array-set! &mid (+ (* (+ (* y ow) x) 4) c)
+                (loop [j 1 acc 0.0] (if (>= j (count ws)) acc
+                  (recur (+ j 1) (+ acc (* (nth ws j) (array-get src (+ (* (+ (* y w) lo j -1) 4) c))))))))))))
+      (dotimes (y oh)
+        (let [ws (nth wy y) lo (fptosi i64 (nth ws 0))]
+          (dotimes (x ow)
+            (dotimes (c 4)
+              (array-set! &out (+ (* (+ (* y ow) x) 4) c)
+                (loop [j 1 acc 0.0] (if (>= j (count ws)) acc
+                  (recur (+ j 1) (+ acc (* (nth ws j) (array-get @mid (+ (* (+ (* (+ lo j -1) ow) x) 4) c))))))))))))
+      @out)))
+
+;; The figure's pixels (its own grid cells, grown by a cell) cropped with a margin, premultiplied, scaled by k.
+(defun sprite (s: Sheet alpha: (Array i8) grid: Grid figs: Figures fig: i64 k: f64) -> Sprite
+  (let [w (. s w) h (. s h) gw (quot w STEP) gh (quot h STEP) rgb (. s rgb) labels (. grid labels) owner (. figs owner)
+        box (nth (. figs boxes) fig)
+        mine? (fn (gx: i64 gy: i64) (= (array-get owner (array-get labels (+ (* (clamp gy 0 (- gh 1)) gw) (clamp gx 0 (- gw 1))))) (+ fig 1)))
+        x0 (max 0 (- (nth box 0) PAD)) y0 (max 0 (- (nth box 1) PAD))
+        cw (- (min w (+ (nth box 2) PAD)) x0) ch (- (min h (+ (nth box 3) PAD)) y0)
+        src (cell (array (* cw ch 4) 0.0))]
+    (do
+      (dotimes (y ch)
+        (dotimes (x cw)
+          (let [px (+ x0 x) py (+ y0 y) gx (quot px STEP) gy (quot py STEP)
+                inside (and (< gx gw) (< gy gh)
+                            (loop [dy -1 hit false] (if (or hit (> dy 1)) hit
+                              (recur (+ dy 1) (or (mine? (- gx 1) (+ gy dy)) (mine? gx (+ gy dy)) (mine? (+ gx 1) (+ gy dy)))))))
+                a (if inside (double (u8 (array-get alpha (+ (* py w) px)))) 0.0)
+                i (* (+ (* py w) px) 3) o (* (+ (* y cw) x) 4)]
+            (do (dotimes (c 3) (array-set! &src (+ o c) (/ (* (double (u8 (array-get rgb (+ i c)))) a) 255.0)))
+                (array-set! &src (+ o 3) a)))))
+      (let [ow (fptosi i64 (Math/floor (+ (* (double cw) k) 0.5))) oh (fptosi i64 (Math/floor (+ (* (double ch) k) 0.5)))
+            px (if (and (= ow cw) (= oh ch)) @src (resample @src cw ch ow oh))
+            out (cell (array (* ow oh 4) 0i8))]
+        (do
+          (dotimes (i (* ow oh))
+            (let [a (array-get px (+ (* i 4) 3))]
+              (do (dotimes (c 3)
+                    (array-set! &out (+ (* i 4) c) (trunc i8 (if (> a 0.5) (round-u8 (/ (* (array-get px (+ (* i 4) c)) 255.0) a)) 0))))
+                  (array-set! &out (+ (* i 4) 3) (trunc i8 (round-u8 a))))))
+          (Sprite ow oh @out))))))
+
+;; ---- out ----------------------------------------------------------------------------------------------------------
+
+(defun vec->bytes (v: (Vec i8)) -> (Array i8)
+  (let [out (cell (array (count v) 0i8))] (do (dotimes (i (count v)) (array-set! &out i (nth v i))) @out)))
+
+(defun c-bytes (a: (Array i8)) -> ptr
+  (unsafe (let [p (alloc (max 1 (array-len a)))] (do (dotimes (i (array-len a)) (store-i8 (ptr+ p i) (array-get a i))) p))))
+
+(defun encode-webp (sp: Sprite) -> (Result (Array i8) str)
+  (unsafe
+    (let [src (c-bytes (. sp rgba)) slot (alloc 8)
+          size (WebPEncodeRGBA src (trunc i32 (. sp w)) (trunc i32 (. sp h)) (trunc i32 (* (. sp w) 4)) 90.0f32 slot)
+          out (if (= size 0) (Err "libwebp could not encode")
+                (let [p (load-ptr slot) bytes (n/bytes-at p size)] (do (WebPFree p) (Ok bytes))))]
+      (do (free src) (free slot) out))))
+
+(defun be32-bytes (x: i64) -> (Vec i8)
+  (mapv (fn (s: i64) (trunc i8 (bit-and (bit-shift-right x s) 255))) [24 16 8 0]))
+
+(defun png-chunk (kind: str data: (Vec i8)) -> (Vec i8)
+  (let [body (into (vec (str-bytes kind)) data)
+        crc (unsafe (let [p (c-bytes (vec->bytes body)) c (crc32 0 p (trunc i32 (count body)))] (do (free p) c)))]
+    (into (into (be32-bytes (count data)) body) (be32-bytes crc))))
+
+(defun encode-png (sp: Sprite) -> (Result (Array i8) str)
+  (let [w (. sp w) h (. sp h) rgba (. sp rgba) row (+ 1 (* w 4)) raw (cell (array (* h row) 0i8))]
+    (do
+      (dotimes (y h) (dotimes (i (* w 4)) (array-set! &raw (+ (* y row) 1 i) (array-get rgba (+ (* y w 4) i)))))
+      (unsafe
+        (let [src (c-bytes @raw) bound (compressBound (* h row)) dst (alloc bound) len (alloc 8)
+              z (do (store-i64 len bound) (compress2 dst len src (* h row) 9i32))
+              out (if (not= z 0i32) (Err (str "zlib could not deflate (" z ")"))
+                    (let [ihdr (into (into (be32-bytes w) (be32-bytes h)) [8i8 6i8 0i8 0i8 0i8])
+                          signature [-119i8 80i8 78i8 71i8 13i8 10i8 26i8 10i8]]
+                      (Ok (vec->bytes (into (into (into signature (png-chunk "IHDR" ihdr))
+                                                (png-chunk "IDAT" (vec (n/bytes-at dst (load-i64 len)))))
+                                          (png-chunk "IEND" []))))))]
+          (do (free src) (free dst) (free len) out))))))
+
+;; ---- main ---------------------------------------------------------------------------------------------------------
+
+(def USAGE "usage: cut-sprites SHEET.png OUT_PREFIX name1 name2 ... [--size 256] [--ext webp|png] [--tolerance 28] [--gap 24]")
+
+(defun parse-opts (argv: (Vec str)) -> (Result Opts str)
+  (loop [i 0 pos [] o (Opts "" "" [] 256 "webp" 28 24)]
+    (if (>= i (count argv))
+      (if (< (count pos) 3) (Err USAGE)
+        (Ok (with o (sheet (nth pos 0)) (prefix (nth pos 1)) (names (vec (drop 2 pos))))))
+      (let [a (nth argv i) v (if (< (+ i 1) (count argv)) (nth argv (+ i 1)) "") num (parse-long v)]
+        (cond
+          (= a "--ext") (if (or (= v "webp") (= v "png")) (recur (+ i 2) pos (with o (ext v))) (Err "--ext takes webp or png"))
+          (= a "--size") (if-some [x num] (recur (+ i 2) pos (with o (size x))) (Err "--size takes a number"))
+          (= a "--tolerance") (if-some [x num] (recur (+ i 2) pos (with o (tolerance x))) (Err "--tolerance takes a number"))
+          (= a "--gap") (if-some [x num] (recur (+ i 2) pos (with o (gap x))) (Err "--gap takes a number"))
+          :else (recur (+ i 1) (conj pos a) o))))))
+
+(defun write-sprite (o: Opts name: str sp: Sprite) -> (Result unit str)
+  (let [out (str (. o prefix) "-" name "." (. o ext))]
+    (try-let [bytes (if (= (. o ext) "png") (encode-png sp) (encode-webp sp))
+              _ (match (os/write-file-bytes out bytes) ((Ok _) (Ok ())) ((Err e) (Err (str out ": " (. e message)))))]
+      (do (println (str out " (" (. sp w) ", " (. sp h) ")")) (Ok ())))))
+
+(defun cut (o: Opts) -> (Result unit str)
+  (try-let [s (read-png (. o sheet))]
+    (let [w (. s w) h (. s h)
+          bg (background-mask s (. o tolerance))
+          alpha (soft-alpha bg w h)
+          grid (label-regions bg w h)
+          figs (figures-of (. grid regions) (. o gap))
+          boxes (. figs boxes)
+          order (if (= (count boxes) 0) [] (reading-order boxes))]
+      (if (not= (count order) (count (. o names)))
+        (Err (str (. o sheet) ": found " (count order) " figures, expected " (count (. o names)) ": " (pr-str boxes)))
+        ;; one scale for the whole sheet, so a character keeps its size when it changes pose
+        (let [longest (reduce max 0 (mapv (fn (b: (Vec i64)) (+ (max (- (nth b 2) (nth b 0)) (- (nth b 3) (nth b 1))) (* 2 PAD))) boxes))
+              k (min 1.0 (/ (double (. o size)) (double longest)))]
+          (loop [j 0]
+            (if (>= j (count order)) (Ok ())
+              (try-let [_ (write-sprite o (nth (. o names) j) (sprite s alpha grid figs (nth order j) k))]
+                (recur (+ j 1))))))))))
+
+(defun main () -> i64
+  (match (try-let [o (parse-opts (args))] (cut o))
+    ((Ok _) 0)
+    ((Err msg) (do (eprintln msg) 1))))

@@ -27,3 +27,7 @@ balance:
 
 serve: web/sim.wasm
 	node server/serve.mjs
+
+# the sprite cutter (art/README.md); links zlib and libwebp
+tools/cut-sprites: tools/cut-sprites.fib
+	$(FIBC) build tools/cut-sprites.fib -o $@

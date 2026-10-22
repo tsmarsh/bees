@@ -27,7 +27,7 @@ web/                  the game: vanilla ES modules, canvas 2D, no build step
   js/game/            event diffing, toasts (voice.js), HUD, audio, the hive's saved state
   js/net/party.js     garden parties: PartyClient and RemoteSim (same interface as Sim)
 server/               static files + garden parties over a hand-written WebSocket (no dependencies)
-tools/cut-sprites.py  cuts a generated sprite sheet into web/art sprites
+tools/cut-sprites.fib cuts a generated sprite sheet into web/art sprites (`make tools/cut-sprites`)
 tests/                node --test: the wasm boundary and a two-person party
 ```
 
