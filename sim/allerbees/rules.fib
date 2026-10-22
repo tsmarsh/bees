@@ -105,6 +105,12 @@
             (range (tune/bee-slots)))
     e))
 
+;; ---- drop in, drop out: a person takes over a bee from its NPC, or hands it back, mid-visit
+(defun set-human (e: Encounter i: i64 human: bool) -> Encounter
+  (if (and (>= i 0) (< i (tune/bee-slots)) (. (bee e i) active))
+    (with-bee e i (with (bee e i) (human human) (clock 0.0)))
+    e))
+
 ;; ---- the end of a visit: whatever is carried home counts
 (defun finish (e: Encounter reason: i64) -> Encounter
   (if (ended? e) e

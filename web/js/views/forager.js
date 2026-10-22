@@ -374,6 +374,8 @@ export class ForagerView {
     if (this.sim.bee(this.slot, "cargo") >= this.sim.bee(this.slot, "capacity") - 1) this.goHome();
   }
 
+  cheer() { this.particles.burst(this.w / 2, this.h * 0.4, 8, "heart", { speed: 140, life: 1.3, gravity: -40 }); }
+
   stats() {
     return { distance: Math.round(this.sim.bee(this.slot, "distance")), delivered: Math.round(this.sim.bee(this.slot, "banked")) };
   }

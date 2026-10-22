@@ -5,7 +5,7 @@ SIM := sim/allerbees/*.fib
 EXPORTS := sim-state-size=stateSize sim-init=init sim-step=step sim-tank-move=tankMove \
   sim-forager-collect=foragerCollect sim-forager-fly=foragerFly sim-forager-slip=foragerSlip \
   sim-forager-puff=foragerPuff sim-forager-home=foragerHome sim-salve-throw=salveThrow \
-  sim-salve-hit=salveHit sim-salve-cloud=salveCloud sim-group-home=groupHome
+  sim-salve-hit=salveHit sim-salve-cloud=salveCloud sim-group-home=groupHome sim-set-human=setHuman
 
 .PHONY: all wasm test specs web-test balance serve
 all: wasm test

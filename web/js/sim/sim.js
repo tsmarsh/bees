@@ -38,6 +38,7 @@ export class Sim {
   salveHit(i, potency) { this.x.salveHit(this.ptr, i, potency); }
   salveCloud() { const before = this.get(E.salves); this.x.salveCloud(this.ptr); return this.get(E.salves) < before; }
   groupHome() { this.x.groupHome(this.ptr); }
+  setHuman(i, human) { this.x.setHuman(this.ptr, i, human ? 1 : 0); }
 
   get(slot) { return this.s[slot]; }
   bee(i, field) { return this.s[BEE_BASE + i * BEE_STRIDE + B[field]]; }

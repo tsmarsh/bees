@@ -148,6 +148,31 @@ legend { font-family: var(--font-display); font-weight: 700; font-size: 1.15rem;
 .how summary { cursor: pointer; font-weight: 700; }
 .how p { font-size: 0.95rem; }
 
+/* ---------- garden parties ---------- */
+.party-panel { margin-top: 2.2rem; padding-top: 1.4rem; border-top: var(--rule); }
+.party-panel h2 { font-size: 1.5rem; }
+.join-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 1rem; }
+.join-form label { font-weight: 700; }
+.join-form input { width: 6.5em; padding: 0.45em 0.7em; border: var(--rule); border-radius: 10px; background: var(--card); text-transform: uppercase; letter-spacing: 0.2em; font-weight: 700; }
+
+.lobby { max-width: 640px; margin: 0 auto; padding: var(--gutter); }
+.lobby h1 { font-size: clamp(2rem, 7vw, 3.2rem); margin-top: 1rem; }
+.code { display: inline-block; padding: 0 0.3em; border: var(--rule); border-radius: 10px; background: var(--honey); letter-spacing: 0.12em; box-shadow: 3px 3px 0 var(--ink); }
+.share { font-size: 1rem; }
+.seats { list-style: none; padding: 0; margin: 1.2rem 0; display: grid; gap: 8px; }
+.seat { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 2px solid var(--ink); border-radius: 12px; background: var(--card); }
+.seat.friend { background: #f8e3b0; }
+.seat.mine { box-shadow: 3px 3px 0 var(--ink); }
+.seat-who { font-style: italic; color: var(--ink-soft); }
+.lobby-roles { display: flex; gap: 8px 18px; flex-wrap: wrap; }
+.lobby-roles legend { flex-basis: 100%; }
+.lobby-roles label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.lobby-roles input { accent-color: var(--ink); width: 1.1em; height: 1.1em; }
+.lobby-roles label:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
+.lobby-status { font-style: italic; min-height: 1.5em; }
+
+.cheer { background: #f7dcd3; }
+
 /* ---------- a visit ---------- */
 .visit {
   position: fixed;

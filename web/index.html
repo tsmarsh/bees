@@ -64,6 +64,20 @@
           <p class="fine" id="loading-note" role="status"></p>
         </form>
 
+        <section class="party-panel" aria-labelledby="party-heading">
+          <h2 id="party-heading">A garden party</h2>
+          <p>Play with friends nearby: everyone plays a different game in the same visit. Friendly NPC bees fill any role nobody takes.</p>
+          <div class="actions">
+            <button type="button" class="button" id="party-create">Start a garden party</button>
+          </div>
+          <form class="join-form" id="party-join">
+            <label for="party-code">Party code</label>
+            <input id="party-code" name="code" inputmode="text" autocomplete="off" autocapitalize="characters" maxlength="4" pattern="[A-Za-z]{4}" placeholder="ABCD" required>
+            <button type="submit" class="button">Join</button>
+          </form>
+          <p class="fine" id="party-note" role="status"></p>
+        </section>
+
         <aside class="pantry" aria-labelledby="pantry-heading">
           <h2 id="pantry-heading">The hive pantry</h2>
           <p class="pot"><span class="pot-number" id="pantry-total">0</span> <span class="pot-unit">drops of nectar, shared by everyone</span></p>
@@ -78,6 +92,30 @@
       </div>
     </section>
 
+    <!-- A garden party's lobby: pick a role, wait for friends, the host starts the visit -->
+    <section id="screen-lobby" class="screen lobby" aria-labelledby="lobby-title" hidden>
+      <h1 id="lobby-title" tabindex="-1">Garden party <span class="code" id="lobby-code"></span></h1>
+      <p class="share">Friends on your network open <strong id="lobby-link"></strong> and join with the code <strong id="lobby-code-2"></strong>.</p>
+      <ol class="seats" id="seats" aria-label="Who is playing what"></ol>
+      <fieldset class="lobby-roles" id="lobby-roles">
+        <legend>Your role</legend>
+        <label><input type="radio" name="lobby-role" value="tank"> Tank</label>
+        <label><input type="radio" name="lobby-role" value="healer"> Healer</label>
+        <label><input type="radio" name="lobby-role" value="forager"> Forager</label>
+      </fieldset>
+      <fieldset class="party" id="lobby-foragers">
+        <legend>Foragers on this visit</legend>
+        <label><input type="radio" name="lobby-foragers" value="1"> One</label>
+        <label><input type="radio" name="lobby-foragers" value="2"> Two</label>
+        <label><input type="radio" name="lobby-foragers" value="3"> Three</label>
+      </fieldset>
+      <p class="lobby-status" id="lobby-status" role="status"></p>
+      <div class="actions">
+        <button type="button" class="button primary" id="lobby-start">Fly to Sunny together</button>
+        <button type="button" class="button quiet" id="lobby-leave">Leave the party</button>
+      </div>
+    </section>
+
     <!-- A visit: one role's game in the canvas, the shared team state around it -->
     <section id="screen-visit" class="screen visit" aria-labelledby="visit-title" hidden>
       <h1 id="visit-title" class="visually-hidden" tabindex="-1">Visiting Sunny</h1>
@@ -86,6 +124,7 @@
         <p class="time-left" id="time-left">2:30 left</p>
         <p class="phase-chip" id="phase-chip">Sunny is calm</p>
         <p class="hud-pot"><span class="visually-hidden">Nectar home:</span><span id="hud-bank">0</span></p>
+        <button type="button" class="button tiny cheer" id="cheer-button" aria-label="Send a cheer to your team">♥ Cheer</button>
         <button type="button" class="button tiny" id="pause-button" aria-haspopup="dialog">Pause</button>
       </div>
       <ol class="team" id="team" aria-label="Your team"></ol>
@@ -116,10 +155,11 @@
 
   <dialog id="pause-dialog" aria-labelledby="pause-title">
     <h2 id="pause-title">Taking a breather</h2>
-    <p>The garden waits for you. Everyone's nectar is safe.</p>
+    <p id="pause-text">The garden waits for you. Everyone's nectar is safe.</p>
     <div class="actions">
       <button type="button" class="button primary" id="resume" autofocus>Keep playing</button>
       <button type="button" class="button" id="head-home">Head home together</button>
+      <button type="button" class="button quiet" id="leave-visit" hidden>Leave the visit</button>
     </div>
   </dialog>
 

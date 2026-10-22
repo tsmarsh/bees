@@ -68,6 +68,11 @@ export class Hud {
         mate.bar.className = v >= 70 ? "high" : v >= 40 ? "mid" : "";
         mate.meter.setAttribute("aria-valuenow", v);
       });
+      const friend = mate.i !== this.you && bee(s, mate.i, "human") === 1;
+      this.set(`h${mate.i}`, friend, (v) => {
+        mate.li.classList.toggle("friend", v);
+        mate.li.querySelector(".mate-name").textContent = mate.i === this.you ? "You" : v ? `${NAMES[mate.i]} ★` : NAMES[mate.i];
+      });
       let label = "";
       if (status === STATUS.resting) label = "resting on a leaf";
       else if (status === STATUS.homeTrip) label = "flying home";

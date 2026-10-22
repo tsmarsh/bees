@@ -22,3 +22,4 @@
 (defun sim-salve-hit (p: ptr i: f64 potency: f64) -> f64 (apply-to p (fn (e: Encounter) (salve-hit e (long i) potency))))
 (defun sim-salve-cloud (p: ptr) -> f64 (apply-to p salve-cloud))
 (defun sim-group-home (p: ptr) -> f64 (apply-to p group-home))
+(defun sim-set-human (p: ptr i: f64 human: f64) -> f64 (apply-to p (fn (e: Encounter) (set-human e (long i) (!= human 0.0)))))

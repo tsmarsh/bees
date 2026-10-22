@@ -119,6 +119,19 @@
             (expect = true (and (> (. (bee c 0) soothed) 0.0) (> (. (bee c 2) soothed) 0.0)))
             (expect = 0.0 (. (bee c 1) soothed)))))
 
+  (feature "friends drop in and out"
+    (scenario "a person joining mid-visit takes the healer from the NPC, and the NPC picks it back up when they leave"
+      (given [e (new-encounter 6 3 -1 0)
+              sick (with-bee e 0 (with (bee e 0) (allergy 90.0)))])
+      (upon [joined (ticks (set-human sick 1 true) 120)
+             left (ticks (set-human (set-human sick 1 true) 1 false) 120)])
+      (then (expect = true (. (bee joined 1) human))
+            (expect = (tune/salve-max) (. joined salves))
+            (expect = true (< (. left salves) (tune/salve-max)))))
+    (scenario "an inactive slot cannot be taken"
+      (given [e (new-encounter 6 1 -1 0)])
+      (then (expect = false (. (bee (set-human e 4 true) 4) human)))))
+
   (feature "every visit counts"
     (scenario "the sun sets on a visit and everything carried is banked"
       (given [e (forager-collect (human-forager 4) 2 9.0)])

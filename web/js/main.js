@@ -12,6 +12,7 @@ import { TankView } from "./views/tank.js";
 import { ForagerView } from "./views/forager.js";
 import { HealerView } from "./views/healer.js";
 import { Celebration } from "./views/celebrate.js";
+import { PartyClient } from "./net/party.js";
 
 const $ = (id) => document.getElementById(id);
 const STEP = 1 / 60;
@@ -20,7 +21,9 @@ const FAST = Math.max(1, Math.min(20, Number(new URLSearchParams(location.search
 const VIEWS = { [ROLE.tank]: TankView, [ROLE.forager]: ForagerView, [ROLE.healer]: HealerView };
 
 const app = {
-  sim: null,
+  sim: null,          // the encounter of the visit in progress: the local Sim, or a party's RemoteSim
+  localSim: null,
+  party: null,        // a PartyClient while in a garden party
   hive: loadHive(),
   audio: new Audio(),
   hud: new Hud(),
@@ -92,16 +95,29 @@ function status(text) { $("loading-note").textContent = text; }
 
 // ---------------------------------------------------------------- a visit
 function startVisit(role, foragers) {
-  if (!app.sim) return;
+  if (!app.localSim) return;
   stopCelebration();
   const h = app.hive;
   h.role = role;
   h.foragers = foragers;
   saveHive(h);
-  const you = humanSlot(role);
+  app.sim = app.localSim;
   const seed = (Date.now() % 2147483000) + 1;
   app.sim.init({ seed, foragers, humanRole: role, gear: gearMask(h) });
+  beginVisit(role, humanSlot(role), foragers, false);
+}
 
+// A party's visit: the server runs the encounter; this browser plays the seat it was given.
+function startPartyVisit(seat) {
+  stopCelebration();
+  app.sim = app.party.sim;
+  const role = seat === 0 ? ROLE.tank : seat === 1 ? ROLE.healer : ROLE.forager;
+  const foragers = [2, 3, 4].filter((i) => app.sim.bee(i, "active")).length;
+  beginVisit(role, seat, foragers, true);
+}
+
+function beginVisit(role, you, foragers, party) {
+  const h = app.hive;
   show("screen-visit", `Visiting Sunny as the ${ROLE_NAMES[role]}: Allerbees`, "visit-title");
   app.hud.setup(app.sim.s, you);
   app.hud.clearToasts();
@@ -115,7 +131,12 @@ function startVisit(role, foragers) {
   $("canvas").tabIndex = 0;
   $("canvas").focus({ preventScroll: true });
 
-  app.visit = { role, you, foragers, prev: app.sim.snapshot(), events: new EventDetector(), acc: 0, last: performance.now(), paused: false, ending: 0, done: false };
+  app.visit = { role, you, foragers, party, prev: app.sim.snapshot(), events: new EventDetector(), acc: 0, last: performance.now(), paused: false, ending: 0, done: false };
+  $("head-home").hidden = party && !app.party.lobby?.host;
+  $("leave-visit").hidden = !party;
+  $("pause-text").textContent = party
+    ? "The visit carries on with your friends while you take a breather. If you leave, an NPC bee takes over your role."
+    : "The garden waits for you. Everyone's nectar is safe.";
   app.audio.setEnabled(h.sound);
   app.audio.start();
   requestAnimationFrame(frame);
@@ -126,8 +147,11 @@ function frame(now) {
   if (!v || v.done) return;
   const dt = Math.min(0.1, (now - v.last) / 1000);
   v.last = now;
-  if (!v.paused) {
-    if (!v.ending) {
+  // a party's visit never pauses: the garden carries on, and the pause dialog is only a breather for you
+  if (!v.paused || v.party) {
+    if (v.party) {
+      app.sim.step();
+    } else if (!v.ending) {
       v.acc += dt * FAST;
       let steps = 0;
       while (v.acc >= STEP && steps < 6 * FAST) {
@@ -173,7 +197,7 @@ function pause() {
   const v = app.visit;
   if (!v || v.paused || v.done) return;
   v.paused = true;
-  app.audio.pause();
+  if (!v.party) app.audio.pause();
   $("pause-dialog").showModal();
 }
 
@@ -183,7 +207,7 @@ function resume() {
   if (!v || !v.paused) return;
   v.paused = false;
   v.last = performance.now();
-  app.audio.resume();
+  if (!v.party) app.audio.resume();
   $("canvas").focus({ preventScroll: true });
 }
 
@@ -220,6 +244,7 @@ function finishVisit() {
     thanks.append(li);
   }
   $("celebrate-status").textContent = "";
+  $("visit-again").textContent = v.party ? "Back to the party" : "Visit Sunny again";
   show("screen-celebrate", `${bank} nectar home: Allerbees`, "celebrate-title");
   app.celebration = new Celebration($("celebrate-canvas"), { bank, foragers: v.foragers, you: v.you, role: v.role });
   app.celebration.start();
@@ -269,8 +294,19 @@ function wire() {
   $("resume").addEventListener("click", resume);
   $("head-home").addEventListener("click", headHome);
   $("pause-dialog").addEventListener("cancel", (e) => { e.preventDefault(); resume(); });
-  $("visit-again").addEventListener("click", () => startVisit(app.hive.role, app.hive.foragers));
-  $("back-to-hive").addEventListener("click", showHive);
+  $("visit-again").addEventListener("click", () => {
+    if (app.party) { if (app.party.lobby?.host) app.party.say({ t: "again" }); showLobby(); }
+    else startVisit(app.hive.role, app.hive.foragers);
+  });
+  $("back-to-hive").addEventListener("click", () => { leaveParty(); showHive(); });
+  $("leave-visit").addEventListener("click", () => { if ($("pause-dialog").open) $("pause-dialog").close(); endVisitView(); leaveParty(); showHive(); });
+  $("cheer-button").addEventListener("click", cheer);
+  $("party-create").addEventListener("click", createParty);
+  $("party-join").addEventListener("submit", (e) => { e.preventDefault(); joinParty($("party-code").value.trim().toUpperCase()); });
+  $("lobby-roles").addEventListener("change", (e) => app.party?.say({ t: "seat", role: e.target.value }));
+  $("lobby-foragers").addEventListener("change", (e) => app.party?.say({ t: "settings", foragers: Number(e.target.value) }));
+  $("lobby-start").addEventListener("click", () => app.party?.say({ t: "start" }));
+  $("lobby-leave").addEventListener("click", () => { leaveParty(); showHive(); });
   $("high-five").addEventListener("click", () => {
     app.audio.ensure();
     if (app.audio.ctx?.state === "suspended") app.audio.ctx.resume();
@@ -294,13 +330,162 @@ async function boot() {
   status("Waking the garden…");
   try {
     const x = await loadSim(new URL("../sim.wasm", import.meta.url));
-    app.sim = new Sim(x);
+    app.localSim = new Sim(x);
+    app.sim = app.localSim;
     start.disabled = false;
     status("");
+    const code = new URLSearchParams(location.search).get("party");
+    if (code) joinParty(code.toUpperCase());
   } catch (err) {
     console.error(err);
     status("The garden couldn't wake up: this browser needs WebAssembly. Please try a recent Safari, Chrome or Firefox.");
   }
+}
+
+// ---------------------------------------------------------------- garden parties
+function partyNote(text) { $("party-note").textContent = text; }
+
+async function createParty() {
+  leaveParty();
+  partyNote("Setting up the party…");
+  const client = watchParty(new PartyClient());
+  try {
+    await client.create(app.hive.foragers, gearMask(app.hive));
+    partyNote("");
+  } catch {
+    partyNote("Garden parties need the Allerbees server on this network: run make serve and open the address it prints.");
+    app.party = null;
+  }
+}
+
+async function joinParty(code) {
+  if (!/^[A-Z]{4}$/.test(code)) { partyNote("A party code is four letters."); return; }
+  leaveParty();
+  partyNote("Finding the party…");
+  const client = watchParty(new PartyClient());
+  try {
+    await client.join(code, gearMask(app.hive));
+  } catch {
+    partyNote("Garden parties need the Allerbees server on this network: run make serve and open the address it prints.");
+    app.party = null;
+  }
+}
+
+function watchParty(client) {
+  app.party = client;
+  client.addEventListener("lobby", (e) => onLobby(e.detail));
+  client.addEventListener("state", () => maybeJoinVisit());
+  client.addEventListener("cheer", (e) => { if (e.detail.seat !== app.visit?.you) receiveCheer(e.detail.seat); });
+  client.addEventListener("error", (e) => { partyNote(e.detail.text); $("lobby-status").textContent = e.detail.text; });
+  client.addEventListener("closed", () => {
+    if (app.party !== client) return;
+    app.party = null;
+    if (app.visit && app.visit.party && !app.visit.done) { endVisitView(); showHive(); partyNote("The party's connection was lost. Your hive is safe; start or join again any time."); }
+    else if (!$("screen-lobby").hidden) { showHive(); partyNote("The party's connection was lost."); }
+  });
+  return client;
+}
+
+function leaveParty() {
+  if (!app.party) return;
+  const p = app.party;
+  app.party = null;
+  p.leave();
+}
+
+function onLobby(lobby) {
+  partyNote("");
+  const inVisit = app.visit && app.visit.party && !app.visit.done;
+  if (inVisit) return;
+  if (!$("screen-celebrate").hidden && lobby.phase !== "visit") return;
+  if (lobby.phase === "visit" && app.party.mySeat !== null) { maybeJoinVisit(); return; }
+  if ($("screen-lobby").hidden) showLobby();
+  else renderLobby();
+}
+
+function maybeJoinVisit() {
+  const p = app.party;
+  if (!p || !p.hasState || p.lobby?.phase !== "visit" || p.mySeat === null) return;
+  if (app.visit && app.visit.party && !app.visit.done) return;
+  startPartyVisit(p.mySeat);
+}
+
+function showLobby() {
+  renderLobby();
+  show("screen-lobby", `Garden party ${app.party?.code || ""}: Allerbees`, "lobby-title");
+}
+
+const SEAT_ROLE = (seat) => (seat === 0 ? "tank" : seat === 1 ? "healer" : "forager");
+
+function renderLobby() {
+  const p = app.party;
+  if (!p || !p.lobby) return;
+  const L = p.lobby;
+  $("lobby-code").textContent = L.code;
+  $("lobby-code-2").textContent = L.code;
+  // localhost only works on this machine: offer the server's network address instead when we have one
+  const local = /^(localhost|127\.|\[::1\])/.test(location.hostname);
+  $("lobby-link").textContent = local && p.lan?.length ? p.lan[0] : location.host;
+  const seats = $("seats");
+  seats.replaceChildren();
+  const taken = new Map(L.seats.filter((s) => s.seat !== null).map((s) => [s.seat, s.id]));
+  for (let slot = 0; slot < 2 + L.foragers; slot++) {
+    const li = document.createElement("li");
+    const who = taken.get(slot);
+    li.className = "seat" + (who ? " friend" : "") + (who === L.you ? " mine" : "");
+    const role = SEAT_ROLE(slot);
+    li.innerHTML = `<span><strong>${NAMES[slot]}</strong>, the ${role}</span><span class="seat-who">${who === L.you ? "you" : who ? "a friend" : "an NPC bee"}</span>`;
+    seats.append(li);
+  }
+  const mine = p.mySeat;
+  for (const input of document.querySelectorAll("input[name=lobby-role]")) {
+    const role = input.value;
+    input.checked = mine !== null && SEAT_ROLE(mine) === role;
+    const free = role === "tank" ? !taken.has(0) : role === "healer" ? !taken.has(1) : [2, 3, 4].slice(0, L.foragers).some((s) => !taken.has(s));
+    input.disabled = !free && !input.checked;
+  }
+  for (const input of document.querySelectorAll("input[name=lobby-foragers]")) {
+    input.checked = Number(input.value) === L.foragers;
+    input.disabled = !L.host || L.phase === "visit";
+  }
+  const humans = L.seats.length;
+  let text;
+  if (L.phase === "visit") text = mine === null ? "A visit is under way! Pick a free role to drop in." : "Joining the visit…";
+  else if (mine === null) text = "Pick a role to play.";
+  else if (L.host) text = humans > 1 ? `${humans} bees are here. Fly when you're ready!` : "Waiting for friends, or fly now with NPC bees.";
+  else text = "Waiting for the host to start the visit…";
+  $("lobby-status").textContent = text;
+  $("lobby-start").hidden = !L.host || L.phase === "visit";
+  $("lobby-start").disabled = mine === null;
+}
+
+function endVisitView() {
+  const v = app.visit;
+  if (!v || v.done) return;
+  v.done = true;
+  app.audio.stop();
+  if (app.view) { app.view.dispose(); app.view = null; }
+}
+
+// ---------------------------------------------------------------- cheers: warm, wordless, for everyone
+function cheer() {
+  const v = app.visit;
+  if (!v) return;
+  app.view?.cheer?.();
+  app.audio.sfx("highfive");
+  if (v.party) app.party?.say({ t: "cheer", kind: "heart" });
+  else {
+    // the NPCs cheer back
+    const mates = [0, 1, 2, 3, 4].filter((i) => i !== v.you && app.sim.bee(i, "active"));
+    const who = mates[Math.floor(Math.random() * mates.length)];
+    setTimeout(() => receiveCheer(who), 500 + Math.random() * 700);
+  }
+}
+
+function receiveCheer(seat) {
+  if (!app.visit || app.visit.done || seat === undefined) return;
+  app.hud.toast({ text: `${NAMES[seat]} cheers you on! ♥`, tone: "joy" }, `cheer-${seat}`);
+  app.view?.cheer?.();
 }
 
 // For tests and the curious: window.allerbees.

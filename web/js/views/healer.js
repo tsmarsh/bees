@@ -327,6 +327,8 @@ export class HealerView {
     if (ev.kind === "showstopper") this.particles.burst(this.w / 2, 0, 40, "confetti", { speed: 280, spread: Math.PI, dir: Math.PI / 2, life: 2, gravity: 140 });
   }
 
+  cheer() { this.particles.burst(this.layout().sling.x + 30, this.layout().sling.y - 40, 8, "heart", { speed: 140, life: 1.3, gravity: -40 }); }
+
   stats() { return { landed: this.landed, saves: this.saves }; }
 
   // For tests and demos: aim at the neediest bee with a rough lead, now and then.

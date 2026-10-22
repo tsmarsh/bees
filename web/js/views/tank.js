@@ -319,6 +319,8 @@ export class TankView {
     }
   }
 
+  cheer() { this.particles.burst(this.flowerX, this.flowerY, 8, "heart", { speed: 140, life: 1.3, gravity: -40 }); }
+
   stats() { return { streak: this.bestCombo, showstoppers: this.sim.enc("showstoppers") }; }
 
   // ---------------------------------------------------------------- drawing
