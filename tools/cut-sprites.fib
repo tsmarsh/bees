@@ -9,6 +9,7 @@
 ;;     tools/cut-sprites SHEET.png OUT_PREFIX name1 name2 ... [--size 256] [--ext png] [--tolerance 28] [--gap 24]
 ;;
 ;; Reads 8-bit RGB or RGBA PNGs. zlib inflates the sheet and deflates a PNG; libwebp encodes the WebP (quality 90).
+;; Images are persistent vectors threaded through loops: each is held once, so an update is in place.
 (ns main (:require [Math :as Math] [fib.math :as math] [fib.os :as os] [fib.os.native :as n]))
 
 (extern uncompress (ptr ptr ptr i64) -> i32 :lib "z")
@@ -22,16 +23,25 @@
 (def PAD 8)
 (def PI 3.141592653589793)
 
-(defstruct Sheet (w: i64 h: i64 rgb: (Array i8)))
+(defstruct Sheet (w: i64 h: i64 rgb: (Vec i8)))
 (defstruct Region (id: i64 x0: i64 y0: i64 x1: i64 y1: i64 n: i64))
-(defstruct Grid (labels: (Array i64) regions: (Vec Region)))
-(defstruct Figures (owner: (Array i64) boxes: (Vec (Vec i64))))
-(defstruct Sprite (w: i64 h: i64 rgba: (Array i8)))
+(defstruct Sweep (bg: (Vec i8) grew: bool))
+(defstruct Flooded (labels: (Vec i64) region: Region))
+(defstruct Grid (labels: (Vec i64) regions: (Vec Region)))
+(defstruct Figures (owner: (Vec i64) boxes: (Vec (Vec i64))))
+(defstruct Sprite (w: i64 h: i64 rgba: (Vec i8)))
 (defstruct Opts (sheet: str prefix: str names: (Vec str) size: i64 ext: str tolerance: i64 gap: i64))
 
 (defun u8 (b: i8) -> i64 (zext i64 b))
 (defun clamp (x: i64 lo: i64 hi: i64) -> i64 (max lo (min hi x)))
 (defun round-u8 (x: f64) -> i64 (clamp (fptosi i64 (Math/floor (+ x 0.5))) 0 255))
+(defun round-i64 (x: f64) -> i64 (fptosi i64 (Math/floor (+ x 0.5))))
+(defun zeros (n: i64) -> (Vec i64) (mapv (fn (_: i64) 0) (range n)))
+;; Whether p holds at any of the nine places around (x, y), and the sum of f over lo..hi (both without building a sequence).
+(defun around? (x: i64 y: i64 p: (fn (i64 i64) bool)) -> bool
+  (loop [d 0] (cond (>= d 9) false (p (+ x (rem d 3) -1) (+ y (quot d 3) -1)) true :else (recur (+ d 1)))))
+(defun sum (lo: i64 hi: i64 f: (fn (i64) f64)) -> f64
+  (loop [i lo acc 0.0] (if (>= i hi) acc (recur (+ i 1) (+ acc (f i))))))
 
 ;; ---- PNG in -------------------------------------------------------------------------------------------------------
 
@@ -47,135 +57,120 @@
   (let [p (- (+ a b) c) pa (Math/abs (- p a)) pb (Math/abs (- p b)) pc (Math/abs (- p c))]
     (cond (and (<= pa pb) (<= pa pc)) a (<= pb pc) b :else c)))
 
-;; Undo the row filters of the inflated image `raw` (rows of 1 + w*bpp bytes) into an RGB sheet; for RGBA,
-;; a pixel less than half opaque counts as white background.
-(defun unfilter (raw: ptr w: i64 h: i64 bpp: i64) -> (Array i8)
-  (let [stride (* w bpp) rgb (cell (array (* w h 3) 0i8)) prev (cell (array stride 0)) cur (cell (array stride 0))]
+;; One row with its filter undone, given the row above.
+(defun unfilter-row (row: ptr prev: (Vec i64) bpp: i64) -> (Vec i64)
+  (let [kind (unsafe (u8 (load-i8 row)))]
+    (loop [i 0 cur []]
+      (if (>= i (count prev)) cur
+        (let [x (unsafe (u8 (load-i8 (ptr+ row (+ i 1)))))
+              a (if (>= i bpp) (nth cur (- i bpp)) 0)
+              b (nth prev i)
+              c (if (>= i bpp) (nth prev (- i bpp)) 0)
+              pred (cond (= kind 0) 0 (= kind 1) a (= kind 2) b (= kind 3) (quot (+ a b) 2) :else (paeth a b c))]
+          (recur (+ i 1) (conj cur (bit-and (+ x pred) 255))))))))
+
+;; The inflated image `raw` (rows of 1 + w*bpp bytes) as RGB; for RGBA, a pixel less than half opaque is white background.
+(defun unfilter (raw: ptr w: i64 h: i64 bpp: i64) -> (Vec i8)
+  (loop [y 0 prev (zeros (* w bpp)) rgb []]
+    (if (>= y h) rgb
+      (let [cur (unfilter-row (unsafe (ptr+ raw (* y (+ 1 (* w bpp))))) prev bpp)
+            rgb (loop [x 0 rgb rgb]
+                  (if (>= x w) rgb
+                    (let [p (* x bpp) opaque (or (= bpp 3) (>= (nth cur (+ p 3)) 128))
+                          v (fn (k: i64) (trunc i8 (if opaque (nth cur (+ p k)) 255)))]
+                      (recur (+ x 1) (conj (conj (conj rgb (v 0)) (v 1)) (v 2))))))]
+        (recur (+ y 1) cur rgb)))))
+
+(defun inflate (a: (Array i8) w: i64 h: i64 bpp: i64) -> (Result (Vec i8) str)
+  (let [idat (loop [i 8 n 0] (if (>= i (array-len a)) n (recur (+ i 12 (be32 a i)) (if (idat? a i) (+ n (be32 a i)) n))))
+        size (* h (+ 1 (* w bpp)))]
     (unsafe
-      (do
-        (dotimes (y h)
-          (let [row (ptr+ raw (* y (+ stride 1))) kind (u8 (load-i8 row))]
-            (do
-              (dotimes (i stride)
-                (let [x (u8 (load-i8 (ptr+ row (+ i 1))))
-                      a (if (>= i bpp) (array-get @cur (- i bpp)) 0)
-                      b (array-get @prev i)
-                      c (if (>= i bpp) (array-get @prev (- i bpp)) 0)
-                      pred (cond (= kind 0) 0 (= kind 1) a (= kind 2) b (= kind 3) (quot (+ a b) 2) :else (paeth a b c))]
-                  (array-set! &cur i (bit-and (+ x pred) 255))))
-              (dotimes (x w)
-                (let [o (* (+ (* y w) x) 3) opaque (or (= bpp 3) (>= (array-get @cur (+ (* x bpp) 3)) 128))]
-                  (dotimes (k 3) (array-set! &rgb (+ o k) (trunc i8 (if opaque (array-get @cur (+ (* x bpp) k)) 255))))))
-              (dotimes (i stride) (array-set! &prev i (array-get @cur i))))))
-        @rgb))))
+      (let [src (alloc (max 1 idat)) dst (alloc size) len (alloc 8)]
+        (do
+          (loop [i 8 at 0]
+            (when (< i (array-len a))
+              (let [m (be32 a i)]
+                (if (idat? a i)
+                  (do (dotimes (j m) (store-i8 (ptr+ src (+ at j)) (array-get a (+ i 8 j)))) (recur (+ i 12 m) (+ at m)))
+                  (recur (+ i 12 m) at)))))
+          (store-i64 len size)
+          (let [z (uncompress dst len src idat)
+                out (if (and (= z 0i32) (= (load-i64 len) size)) (Ok (unfilter dst w h bpp)) (Err (str "cannot inflate (zlib " z ")")))]
+            (do (free src) (free dst) (free len) out)))))))
 
 (defun read-png (path: str) -> (Result Sheet str)
   (match (os/read-file-bytes path 268435456)
     ((Err e) (Err (str path ": " (. e message))))
     ((Ok a)
       (if (or (< (array-len a) 33) (not= (be32 a 12) 1229472850)) (Err (str path ": not a PNG")) ; IHDR
-        (let [w (be32 a 16) h (be32 a 20) depth (u8 (array-get a 24)) colour (u8 (array-get a 25))
-              interlace (u8 (array-get a 28)) bpp (if (= colour 6) 4 3)]
+        (let [w (be32 a 16) h (be32 a 20) depth (u8 (array-get a 24)) colour (u8 (array-get a 25)) interlace (u8 (array-get a 28))]
           (if (or (not= depth 8) (not (or (= colour 2) (= colour 6))) (not= interlace 0))
             (Err (str path ": only 8-bit, non-interlaced RGB or RGBA PNGs"))
-            (let [idat (loop [i 8 n 0] (if (>= i (array-len a)) n
-                                         (recur (+ i 12 (be32 a i)) (if (idat? a i) (+ n (be32 a i)) n))))
-                  size (* h (+ 1 (* w bpp)))]
-              (unsafe
-                (let [src (alloc (max 1 idat)) dst (alloc size) len (alloc 8)]
-                  (do
-                    (loop [i 8 at 0]
-                      (when (< i (array-len a))
-                        (let [m (be32 a i)]
-                          (if (idat? a i)
-                            (do (dotimes (j m) (store-i8 (ptr+ src (+ at j)) (array-get a (+ i 8 j)))) (recur (+ i 12 m) (+ at m)))
-                            (recur (+ i 12 m) at)))))
-                    (store-i64 len size)
-                    (let [z (uncompress dst len src idat)
-                          out (if (and (= z 0i32) (= (load-i64 len) size)) (Ok (Sheet w h (unfilter dst w h bpp)))
-                                (Err (str path ": cannot inflate (zlib " z ")")))]
-                      (do (free src) (free dst) (free len) out))))))))))))
+            (match (inflate a w h (if (= colour 6) 4 3))
+              ((Ok rgb) (Ok (Sheet w h rgb)))
+              ((Err e) (Err (str path ": " e))))))))))
 
 ;; ---- background and figures ---------------------------------------------------------------------------------------
 
-;; 1 where a pixel is near-white and connected to the border.
-(defun background-mask (s: Sheet tolerance: i64) -> (Array i8)
-  (let [w (. s w) h (. s h) rgb (. s rgb) lo (- 255 tolerance)
-        bg (cell (array (* w h) 0i8)) queue (cell (array (* w h) 0)) tail (cell 0)
-        white? (fn (i: i64) (and (>= (u8 (array-get rgb (* i 3))) lo) (>= (u8 (array-get rgb (+ (* i 3) 1))) lo)
-                                 (>= (u8 (array-get rgb (+ (* i 3) 2))) lo)))
-        push (fn (i: i64) (when (and (= (array-get @bg i) 0i8) (white? i))
-                            (do (array-set! &bg i 1i8) (array-set! &queue @tail i) (set! tail (+ @tail 1)))))]
-    (do
-      (dotimes (x w) (do (push x) (push (+ (* (- h 1) w) x))))
-      (dotimes (y h) (do (push (* y w)) (push (+ (* y w) (- w 1)))))
-      (loop [head 0]
-        (when (< head @tail)
-          (let [i (array-get @queue head) x (rem i w) y (quot i w)]
-            (do (when (> x 0) (push (- i 1))) (when (< x (- w 1)) (push (+ i 1)))
-                (when (> y 0) (push (- i w))) (when (< y (- h 1)) (push (+ i w)))
-                (recur (+ head 1))))))
-      @bg)))
+;; 1 where a pixel is near-white and connected to the border: the border's white pixels, then sweeps forward and back,
+;; each taking in the white pixels next to the background, until a sweep finds nothing new.
+(defun background-mask (s: Sheet tolerance: i64) -> (Vec i8)
+  (let [w (. s w) h (. s h) rgb (. s rgb) lo (- 255 tolerance) n (* w h)
+        white? (fn (i: i64) (and (>= (u8 (nth rgb (* i 3))) lo) (>= (u8 (nth rgb (+ (* i 3) 1))) lo) (>= (u8 (nth rgb (+ (* i 3) 2))) lo)))
+        edge? (fn (i: i64) (let [x (rem i w) y (quot i w)] (or (= x 0) (= y 0) (= x (- w 1)) (= y (- h 1)))))
+        start (mapv (fn (i: i64) (if (and (edge? i) (white? i)) 1i8 0i8)) (range n))
+        reached? (fn (bg: (Vec i8) i: i64)
+                   (let [x (rem i w)]
+                     (or (and (> x 0) (= (nth bg (- i 1)) 1i8)) (and (< x (- w 1)) (= (nth bg (+ i 1)) 1i8))
+                         (and (>= i w) (= (nth bg (- i w)) 1i8)) (and (< (+ i w) n) (= (nth bg (+ i w)) 1i8)))))]
+    (loop [bg start forward true]
+      (let [sweep (loop [k 0 bg bg grew false]
+                    (if (>= k n) (Sweep bg grew)
+                      (let [i (if forward k (- n 1 k))]
+                        (if (and (= (nth bg i) 0i8) (white? i) (reached? bg i))
+                          (recur (+ k 1) (assoc bg i 1i8) true)
+                          (recur (+ k 1) bg grew)))))]
+        (if (. sweep grew) (recur (. sweep bg) (not forward)) (. sweep bg))))))
 
 ;; The alpha channel: opaque off the background, pulled in by a pixel and softened, so the ink outline doesn't sit on a
 ;; hard white fringe (a 3x3 minimum, then a Gaussian of sigma 0.8).
-(defun soft-alpha (bg: (Array i8) w: i64 h: i64) -> (Array i8)
-  (let [mn (cell (array (* w h) 0i8)) tmp (cell (array (* w h) 0.0)) out (cell (array (* w h) 0i8))
-        bg? (fn (x: i64 y: i64) (= (array-get bg (+ (* (clamp y 0 (- h 1)) w) (clamp x 0 (- w 1)))) 1i8))
+(defun soft-alpha (bg: (Vec i8) w: i64 h: i64) -> (Vec i8)
+  (let [at (fn (x: i64 y: i64) (+ (* (clamp y 0 (- h 1)) w) (clamp x 0 (- w 1))))
+        near-bg? (fn (x: i64 y: i64) (around? x y (fn (u: i64 v: i64) (= (nth bg (at u v)) 1i8))))
         kernel (let [ws (mapv (fn (d: i64) (math/exp (/ (* -1.0 (double (* d d))) (* 2.0 0.64)))) (range -3 4))
                      total (reduce + 0.0 ws)]
-                 (mapv (fn (x: f64) (/ x total)) ws))]
-    (do
-      (dotimes (y h)
-        (dotimes (x w)
-          (let [near (loop [dy -1 hit false]
-                       (if (or hit (> dy 1)) hit
-                         (recur (+ dy 1) (or (bg? (- x 1) (+ y dy)) (bg? x (+ y dy)) (bg? (+ x 1) (+ y dy))))))]
-            (array-set! &mn (+ (* y w) x) (if near 0i8 -1i8)))))
-      (dotimes (y h)
-        (dotimes (x w)
-          (array-set! &tmp (+ (* y w) x)
-            (loop [d -3 acc 0.0] (if (> d 3) acc
-              (recur (+ d 1) (+ acc (* (nth kernel (+ d 3)) (double (u8 (array-get @mn (+ (* y w) (clamp (+ x d) 0 (- w 1))))))))))))))
-      (dotimes (y h)
-        (dotimes (x w)
-          (array-set! &out (+ (* y w) x)
-            (trunc i8 (round-u8 (loop [d -3 acc 0.0] (if (> d 3) acc
-              (recur (+ d 1) (+ acc (* (nth kernel (+ d 3)) (array-get @tmp (+ (* (clamp (+ y d) 0 (- h 1)) w) x))))))))))))
-      @out)))
+                 (mapv (fn (x: f64) (/ x total)) ws))
+        mn (mapv (fn (i: i64) (if (near-bg? (rem i w) (quot i w)) 0.0 255.0)) (range (* w h)))
+        across (mapv (fn (i: i64) (sum -3 4 (fn (d: i64) (* (nth kernel (+ d 3)) (nth mn (at (+ (rem i w) d) (quot i w))))))) (range (* w h)))]
+    (mapv (fn (i: i64) (trunc i8 (round-u8 (sum -3 4 (fn (d: i64) (* (nth kernel (+ d 3)) (nth across (at (rem i w) (+ (quot i w) d))))))))) (range (* w h)))))
 
-;; Label the foreground on a coarse grid: a cell is foreground if any of its corners is.
-(defun label-regions (bg: (Array i8) w: i64 h: i64) -> Grid
-  (let [gw (quot w STEP) gh (quot h STEP)
-        fg (cell (array (* gw gh) 0i8)) labels (cell (array (* gw gh) 0)) queue (cell (array (* gw gh) 0))]
-    (do
-      (dotimes (gy gh)
-        (dotimes (gx gw)
-          (let [r (* gy STEP w) x (* gx STEP) q (+ r (* (- STEP 1) w))]
-            (when (not (and (= (array-get bg (+ r x)) 1i8) (= (array-get bg (+ r x (- STEP 1))) 1i8)
-                            (= (array-get bg (+ q x)) 1i8) (= (array-get bg (+ q x (- STEP 1))) 1i8)))
-              (array-set! &fg (+ (* gy gw) gx) 1i8)))))
-      (let [regions
-            (loop [start 0 regions []]
-              (cond
-                (>= start (* gw gh)) regions
-                (or (= (array-get @fg start) 0i8) (not= (array-get @labels start) 0)) (recur (+ start 1) regions)
-                :else
-                (let [id (+ (count regions) 1)
-                      take (fn (j: i64 t: i64) (if (and (>= j 0) (= (array-get @fg j) 1i8) (= (array-get @labels j) 0))
-                                                 (do (array-set! &labels j id) (array-set! &queue t j) (+ t 1)) t))]
-                  (do
-                    (array-set! &labels start id) (array-set! &queue 0 start)
-                    (let [r (loop [head 0 tail 1 x0 gw y0 gh x1 0 y1 0]
-                              (if (>= head tail) (Region id (* x0 STEP) (* y0 STEP) (* (+ x1 1) STEP) (* (+ y1 1) STEP) tail)
-                                (let [i (array-get @queue head) x (rem i gw) y (quot i gw)
-                                      t1 (take (if (< x (- gw 1)) (+ i 1) -1) tail)
-                                      t2 (take (if (> x 0) (- i 1) -1) t1)
-                                      t3 (take (if (< y (- gh 1)) (+ i gw) -1) t2)
-                                      t4 (take (if (> y 0) (- i gw) -1) t3)]
-                                  (recur (+ head 1) t4 (min x0 x) (min y0 y) (max x1 x) (max y1 y)))))]
-                      (recur (+ start 1) (conj regions r)))))))]
-        (Grid @labels regions)))))
+;; The foreground on a coarse grid: a cell is foreground if any of its corners is.
+(defun grid-foreground (bg: (Vec i8) w: i64 h: i64) -> (Vec bool)
+  (let [gw (quot w STEP)]
+    (mapv (fn (c: i64)
+            (let [r (* (quot c gw) STEP w) x (* (rem c gw) STEP) q (+ r (* (- STEP 1) w))]
+              (not (and (= (nth bg (+ r x)) 1i8) (= (nth bg (+ r x (- STEP 1))) 1i8)
+                        (= (nth bg (+ q x)) 1i8) (= (nth bg (+ q x (- STEP 1))) 1i8)))))
+      (range (* gw (quot h STEP))))))
+
+;; Flood one region from `start`, labelling it `id`; returns the labels and the region.
+(defun flood (fg: (Vec bool) labels: (Vec i64) gw: i64 gh: i64 start: i64 id: i64) -> Flooded
+  (loop [head 0 queue [start] labels (assoc labels start id) x0 gw y0 gh x1 0 y1 0]
+    (if (>= head (count queue)) (Flooded labels (Region id (* x0 STEP) (* y0 STEP) (* (+ x1 1) STEP) (* (+ y1 1) STEP) (count queue)))
+      (let [i (nth queue head) x (rem i gw) y (quot i gw)
+            next (filterv (fn (j: i64) (and (>= j 0) (nth fg j) (= (nth labels j) 0)))
+                   [(if (< x (- gw 1)) (+ i 1) -1) (if (> x 0) (- i 1) -1) (if (< y (- gh 1)) (+ i gw) -1) (if (> y 0) (- i gw) -1)])]
+        (recur (+ head 1) (into queue next) (reduce (fn (ls: (Vec i64) j: i64) (assoc ls j id)) labels next)
+          (min x0 x) (min y0 y) (max x1 x) (max y1 y))))))
+
+(defun label-regions (bg: (Vec i8) w: i64 h: i64) -> Grid
+  (let [gw (quot w STEP) gh (quot h STEP) fg (grid-foreground bg w h)]
+    (loop [start 0 labels (zeros (* gw gh)) regions []]
+      (cond
+        (>= start (* gw gh)) (Grid labels regions)
+        (or (not (nth fg start)) (not= (nth labels start) 0)) (recur (+ start 1) labels regions)
+        :else (let [f (flood fg labels gw gh start (+ (count regions) 1))]
+                (recur (+ start 1) (. f labels) (conj regions (. f region))))))))
 
 (defun touches? (b: (Vec i64) r: Region gap: i64) -> bool
   (and (< (- (nth b 0) gap) (. r x1)) (< (- (. r x0) gap) (nth b 2)) (< (- (nth b 1) gap) (. r y1)) (< (- (. r y0) gap) (nth b 3))))
@@ -185,19 +180,20 @@
 (defun figures-of (regions: (Vec Region) gap: i64) -> Figures
   (let [biggest (reduce max 0 (mapv (fn (r: Region) (. r n)) regions))
         big? (fn (r: Region) (>= (* 100 (. r n)) (* 15 biggest)))
-        owner (cell (array (+ (count regions) 1) 0))
-        figures (reduce (fn (fs: (Vec (Vec i64)) r: Region)
-                          (if (big? r) (do (array-set! &owner (. r id) (+ (count fs) 1)) (conj fs [(. r x0) (. r y0) (. r x1) (. r y1)])) fs))
-                  [] regions)
-        boxes (reduce (fn (fs: (Vec (Vec i64)) r: Region)
-                        (if (or (big? r) (< (. r n) 4)) fs
-                          (match (first (filter (fn (k: i64) (touches? (nth fs k) r gap)) (range (count fs))))
-                            ((some k) (let [b (nth fs k)]
-                                        (do (array-set! &owner (. r id) (+ k 1))
-                                            (assoc fs k [(min (nth b 0) (. r x0)) (min (nth b 1) (. r y0)) (max (nth b 2) (. r x1)) (max (nth b 3) (. r y1))]))))
-                            (nil fs))))
-                figures regions)]
-    (Figures @owner boxes)))
+        figures (reduce (fn (f: Figures r: Region)
+                          (if (big? r)
+                            (Figures (assoc (. f owner) (. r id) (+ (count (. f boxes)) 1)) (conj (. f boxes) [(. r x0) (. r y0) (. r x1) (. r y1)]))
+                            f))
+                  (Figures (zeros (+ (count regions) 1)) []) regions)]
+    (reduce (fn (f: Figures r: Region)
+              (let [bs (. f boxes)]
+                (if (or (big? r) (< (. r n) 4)) f
+                  (match (first (filter (fn (k: i64) (touches? (nth bs k) r gap)) (range (count bs))))
+                    ((some k) (let [b (nth bs k)]
+                                (Figures (assoc (. f owner) (. r id) (+ k 1))
+                                  (assoc bs k [(min (nth b 0) (. r x0)) (min (nth b 1) (. r y0)) (max (nth b 2) (. r x1)) (max (nth b 3) (. r y1))]))))
+                    (nil f)))))
+      figures regions)))
 
 ;; Figure indices in reading order: rows by centre height, then left to right.
 (defun reading-order (boxes: (Vec (Vec i64))) -> (Vec i64)
@@ -222,69 +218,54 @@
   (let [scale (/ (double n-in) (double n-out)) support (* 3.0 (max scale 1.0))]
     (mapv (fn (o: i64)
             (let [centre (* (+ (double o) 0.5) scale)
-                  lo (max 0 (fptosi i64 (Math/floor (+ (- centre support) 0.5))))
-                  hi (min n-in (fptosi i64 (Math/floor (+ centre support 0.5))))
+                  lo (max 0 (round-i64 (- centre support)))
+                  hi (min n-in (round-i64 (+ centre support)))
                   ws (mapv (fn (i: i64) (lanczos (/ (- (+ (double i) 0.5) centre) (max scale 1.0)))) (range lo hi))
                   total (reduce + 0.0 ws)]
               (into [(double lo)] (mapv (fn (x: f64) (/ x total)) ws))))
       (range n-out))))
 
-(defun resample (src: (Array f64) w: i64 h: i64 ow: i64 oh: i64) -> (Array f64)
-  (let [wx (weights w ow) wy (weights h oh) mid (cell (array (* ow h 4) 0.0)) out (cell (array (* ow oh 4) 0.0))]
-    (do
-      (dotimes (y h)
-        (dotimes (x ow)
-          (let [ws (nth wx x) lo (fptosi i64 (nth ws 0))]
-            (dotimes (c 4)
-              (array-set! &mid (+ (* (+ (* y ow) x) 4) c)
-                (loop [j 1 acc 0.0] (if (>= j (count ws)) acc
-                  (recur (+ j 1) (+ acc (* (nth ws j) (array-get src (+ (* (+ (* y w) lo j -1) 4) c))))))))))))
-      (dotimes (y oh)
-        (let [ws (nth wy y) lo (fptosi i64 (nth ws 0))]
-          (dotimes (x ow)
-            (dotimes (c 4)
-              (array-set! &out (+ (* (+ (* y ow) x) 4) c)
-                (loop [j 1 acc 0.0] (if (>= j (count ws)) acc
-                  (recur (+ j 1) (+ acc (* (nth ws j) (array-get @mid (+ (* (+ (* (+ lo j -1) ow) x) 4) c))))))))))))
-      @out)))
+;; One axis of the resampling over `outer` lines of RGBA pixels: `index line i` is where input pixel i of a line is.
+;; The result is line-major: line, then output pixel, then channel.
+(defun resample-axis (src: (Vec f64) ws: (Vec (Vec f64)) outer: i64 index: (fn (i64 i64) i64)) -> (Vec f64)
+  (let [n-out (count ws)]
+    (mapv (fn (v: i64)
+            (let [c (rem v 4) p (quot v 4) line (quot p n-out) w (nth ws (rem p n-out)) lo (fptosi i64 (nth w 0))]
+              (sum 1 (count w) (fn (j: i64) (* (nth w j) (nth src (+ (* (index line (+ lo j -1)) 4) c)))))))
+      (range (* outer n-out 4)))))
+
+(defun resample (src: (Vec f64) w: i64 h: i64 ow: i64 oh: i64) -> (Vec f64)
+  (let [across (resample-axis src (weights w ow) h (fn (y: i64 x: i64) (+ (* y w) x)))     ; rows: (y, x) at y*ow + x
+        down (resample-axis across (weights h oh) ow (fn (x: i64 y: i64) (+ (* y ow) x)))] ; columns: (x, y) at x*oh + y
+    (mapv (fn (v: i64) (let [p (quot v 4)] (nth down (+ (* (+ (* (rem p ow) oh) (quot p ow)) 4) (rem v 4))))) (range (* ow oh 4)))))
 
 ;; The figure's pixels (its own grid cells, grown by a cell) cropped with a margin, premultiplied, scaled by k.
-(defun sprite (s: Sheet alpha: (Array i8) grid: Grid figs: Figures fig: i64 k: f64) -> Sprite
+(defun sprite (s: Sheet alpha: (Vec i8) grid: Grid figs: Figures fig: i64 k: f64) -> Sprite
   (let [w (. s w) h (. s h) gw (quot w STEP) gh (quot h STEP) rgb (. s rgb) labels (. grid labels) owner (. figs owner)
         box (nth (. figs boxes) fig)
-        mine? (fn (gx: i64 gy: i64) (= (array-get owner (array-get labels (+ (* (clamp gy 0 (- gh 1)) gw) (clamp gx 0 (- gw 1))))) (+ fig 1)))
+        mine? (fn (gx: i64 gy: i64) (= (nth owner (nth labels (+ (* (clamp gy 0 (- gh 1)) gw) (clamp gx 0 (- gw 1))))) (+ fig 1)))
+        inside? (fn (px: i64 py: i64)
+                  (let [gx (quot px STEP) gy (quot py STEP)]
+                    (and (< gx gw) (< gy gh) (around? gx gy mine?))))
         x0 (max 0 (- (nth box 0) PAD)) y0 (max 0 (- (nth box 1) PAD))
         cw (- (min w (+ (nth box 2) PAD)) x0) ch (- (min h (+ (nth box 3) PAD)) y0)
-        src (cell (array (* cw ch 4) 0.0))]
-    (do
-      (dotimes (y ch)
-        (dotimes (x cw)
-          (let [px (+ x0 x) py (+ y0 y) gx (quot px STEP) gy (quot py STEP)
-                inside (and (< gx gw) (< gy gh)
-                            (loop [dy -1 hit false] (if (or hit (> dy 1)) hit
-                              (recur (+ dy 1) (or (mine? (- gx 1) (+ gy dy)) (mine? gx (+ gy dy)) (mine? (+ gx 1) (+ gy dy)))))))
-                a (if inside (double (u8 (array-get alpha (+ (* py w) px)))) 0.0)
-                i (* (+ (* py w) px) 3) o (* (+ (* y cw) x) 4)]
-            (do (dotimes (c 3) (array-set! &src (+ o c) (/ (* (double (u8 (array-get rgb (+ i c)))) a) 255.0)))
-                (array-set! &src (+ o 3) a)))))
-      (let [ow (fptosi i64 (Math/floor (+ (* (double cw) k) 0.5))) oh (fptosi i64 (Math/floor (+ (* (double ch) k) 0.5)))
-            px (if (and (= ow cw) (= oh ch)) @src (resample @src cw ch ow oh))
-            out (cell (array (* ow oh 4) 0i8))]
-        (do
-          (dotimes (i (* ow oh))
-            (let [a (array-get px (+ (* i 4) 3))]
-              (do (dotimes (c 3)
-                    (array-set! &out (+ (* i 4) c) (trunc i8 (if (> a 0.5) (round-u8 (/ (* (array-get px (+ (* i 4) c)) 255.0) a)) 0))))
-                  (array-set! &out (+ (* i 4) 3) (trunc i8 (round-u8 a))))))
-          (Sprite ow oh @out))))))
+        src (mapv (fn (v: i64)
+                    (let [c (rem v 4) px (+ x0 (rem (quot v 4) cw)) py (+ y0 (quot (quot v 4) cw)) i (+ (* py w) px)
+                          a (if (inside? px py) (double (u8 (nth alpha i))) 0.0)]
+                      (if (= c 3) a (/ (* (double (u8 (nth rgb (+ (* i 3) c)))) a) 255.0))))
+              (range (* cw ch 4)))
+        ow (round-i64 (* (double cw) k)) oh (round-i64 (* (double ch) k))
+        px (if (and (= ow cw) (= oh ch)) src (resample src cw ch ow oh))]
+    (Sprite ow oh
+      (mapv (fn (v: i64)
+              (let [c (rem v 4) a (nth px (+ (* (quot v 4) 4) 3))]
+                (trunc i8 (cond (= c 3) (round-u8 a) (> a 0.5) (round-u8 (/ (* (nth px v) 255.0) a)) :else 0))))
+        (range (* ow oh 4))))))
 
 ;; ---- out ----------------------------------------------------------------------------------------------------------
 
-(defun vec->bytes (v: (Vec i8)) -> (Array i8)
-  (let [out (cell (array (count v) 0i8))] (do (dotimes (i (count v)) (array-set! &out i (nth v i))) @out)))
-
-(defun c-bytes (a: (Array i8)) -> ptr
-  (unsafe (let [p (alloc (max 1 (array-len a)))] (do (dotimes (i (array-len a)) (store-i8 (ptr+ p i) (array-get a i))) p))))
+(defun c-bytes (v: (Vec i8)) -> ptr
+  (unsafe (let [p (alloc (max 1 (count v)))] (do (dotimes (i (count v)) (store-i8 (ptr+ p i) (nth v i))) p))))
 
 (defun encode-webp (sp: Sprite) -> (Result (Array i8) str)
   (unsafe
@@ -299,23 +280,25 @@
 
 (defun png-chunk (kind: str data: (Vec i8)) -> (Vec i8)
   (let [body (into (vec (str-bytes kind)) data)
-        crc (unsafe (let [p (c-bytes (vec->bytes body)) c (crc32 0 p (trunc i32 (count body)))] (do (free p) c)))]
+        crc (unsafe (let [p (c-bytes body) c (crc32 0 p (trunc i32 (count body)))] (do (free p) c)))]
     (into (into (be32-bytes (count data)) body) (be32-bytes crc))))
 
 (defun encode-png (sp: Sprite) -> (Result (Array i8) str)
-  (let [w (. sp w) h (. sp h) rgba (. sp rgba) row (+ 1 (* w 4)) raw (cell (array (* h row) 0i8))]
-    (do
-      (dotimes (y h) (dotimes (i (* w 4)) (array-set! &raw (+ (* y row) 1 i) (array-get rgba (+ (* y w 4) i)))))
-      (unsafe
-        (let [src (c-bytes @raw) bound (compressBound (* h row)) dst (alloc bound) len (alloc 8)
-              z (do (store-i64 len bound) (compress2 dst len src (* h row) 9i32))
-              out (if (not= z 0i32) (Err (str "zlib could not deflate (" z ")"))
-                    (let [ihdr (into (into (be32-bytes w) (be32-bytes h)) [8i8 6i8 0i8 0i8 0i8])
-                          signature [-119i8 80i8 78i8 71i8 13i8 10i8 26i8 10i8]]
-                      (Ok (vec->bytes (into (into (into signature (png-chunk "IHDR" ihdr))
-                                                (png-chunk "IDAT" (vec (n/bytes-at dst (load-i64 len)))))
-                                          (png-chunk "IEND" []))))))]
-          (do (free src) (free dst) (free len) out))))))
+  (let [w (. sp w) h (. sp h) rgba (. sp rgba) row (+ 1 (* w 4))
+        raw (mapv (fn (i: i64) (let [x (rem i row)] (if (= x 0) 0i8 (nth rgba (+ (* (quot i row) w 4) x -1))))) (range (* h row)))]
+    (unsafe
+      (let [src (c-bytes raw) bound (compressBound (count raw)) dst (alloc bound) len (alloc 8)
+            z (do (store-i64 len bound) (compress2 dst len src (count raw) 9i32))
+            out (if (not= z 0i32) (Err (str "zlib could not deflate (" z ")"))
+                  (let [ihdr (into (into (be32-bytes w) (be32-bytes h)) [8i8 6i8 0i8 0i8 0i8])
+                        png (-> [-119i8 80i8 78i8 71i8 13i8 10i8 26i8 10i8]
+                                (into (png-chunk "IHDR" ihdr))
+                                (into (png-chunk "IDAT" (vec (n/bytes-at dst (load-i64 len)))))
+                                (into (png-chunk "IEND" [])))
+                        p (c-bytes png)
+                        bytes (n/bytes-at p (count png))]
+                    (do (free p) (Ok bytes))))]
+        (do (free src) (free dst) (free len) out)))))
 
 ;; ---- main ---------------------------------------------------------------------------------------------------------
 
@@ -354,10 +337,9 @@
         ;; one scale for the whole sheet, so a character keeps its size when it changes pose
         (let [longest (reduce max 0 (mapv (fn (b: (Vec i64)) (+ (max (- (nth b 2) (nth b 0)) (- (nth b 3) (nth b 1))) (* 2 PAD))) boxes))
               k (min 1.0 (/ (double (. o size)) (double longest)))]
-          (loop [j 0]
-            (if (>= j (count order)) (Ok ())
-              (try-let [_ (write-sprite o (nth (. o names) j) (sprite s alpha grid figs (nth order j) k))]
-                (recur (+ j 1))))))))))
+          (reduce (fn (done: (Result unit str) j: i64)
+                    (try-let [_ done] (write-sprite o (nth (. o names) j) (sprite s alpha grid figs (nth order j) k))))
+            (Ok ()) (range (count order))))))))
 
 (defun main () -> i64
   (match (try-let [o (parse-opts (args))] (cut o))
