@@ -1,590 +1,76 @@
 # Allerbees
 
-A non-violent, cozy MMO-lite where bees collect pollen from flowers who love them too much.
-
-## Concept
-
-In the not-too-distant future, pollution has made your hive allergic to pollen—but it's still the only protein source. Bees must work together to collect pollen while managing their allergies.
-
-This is an allegory for social anarchism: strong individuals who understand that society needs to function together. Nobody is self-sufficient, and that's the point.
-
-## Core Design Principles
-
-### Theme
-- **Nobody dies.** Ever. Fail states are "tap outs" where bees retreat. Flowers are sad when this happens—they love bees and didn't mean to hurt them.
-- **No enemies.** Flowers aren't adversaries. The "conflict" is environmental (pollution/allergies), not combat.
-- **Interdependence is strength.** The tank can't collect, the healer can't survive exposure alone, the DPS can't operate without cover.
-- **The honey is still delicious.** Life is harder than previous generations had it, but joy, creativity, and community remain.
-
-### Audience
-- Target: 51%+ women players
-- Cute AF aesthetic (papercraft style in final version)
-- Depth hidden beneath accessibility—WoW raiders will recognize the mechanics, casual players just see cute bees collecting pollen
-
-### Monetization
-- Apple Arcade or $3 premium purchase
-- No predatory mechanics, no artificial friction, no FOMO
-- The anarcho-socialist theme must stay intact—you can't preach mutual aid while running a gacha
-
-## The Trinity (Renamed)
-
-| Role | Name | Function |
-|------|------|----------|
-| Tank | **Diva** | Attracts flower attention through performance (wiggling, singing, compliments). Manages "rizz" to keep flowers focused on them. |
-| Healer | **Healer** | Applies honey salves, calls on queen's power. Most allergic—must stay at range. |
-| DPS | **Gatherer** | Collects pollen while flowers are distracted. Trail collectors (fast, follow dropped pollen) or cache raiders (slower, hit stem caches). |
-
-### Vocabulary
-- **Rizz** not "aggro"—flower's affection/attention toward a bee
-- **Cuteness metrics** (fluffiness, brightness, etc.)—different flowers value different traits
-- **Tap out** not "death"—bee retreats due to allergies
-- **Blissed out**—flower in a happy daze, moves predictably (CC equivalent)
-
-## Flower Mechanics
-
-Flowers are like raid bosses:
-- **Multiple heads** (1-N) that move independently and drop pollen
-- **Stem caches**—stationary high-value pollen, but collecting "tickles" and grabs attention
-- **Attention hierarchy**: Being tickled > Highest cuteness accumulator > Default behavior
-- **Collision**—physical damage if bee and flower head collide
-
-### Rizz System
-- Each head tracks rizz (0-100)
-- Rizz decays over time
-- Low rizz: head notices and pursues gatherers
-- High rizz: head is blissed out, moves lazily and predictably
-- Divas build rizz through cuteness actions (wiggle, sing, compliments)
-- Cache collection causes rizz snap—head suddenly interested in that location
-
-## Progression
-
-### Role Emergence
-- Everyone starts as a Gatherer
-- No class selection screen—you discover your role through play
-- Kit toward Diva (invest in fluffiness, brightness) or Healer (honey salves, queen connection)
-- Flexibility: respec by changing gear, not a permanent choice
-
-### Difficulty Tiers
-1. **Solo Gatherer**—simple flowers, no companions needed
-2. **AI Companions**—multi-head flowers, AI Diva and Healer support you
-3. **Coordination Required**—complex flowers where AI can't adapt fast enough
-4. **Full Squad**—raid-equivalent, all human team
-
-Casual players live happily in Tier 1-2 forever. Depth-seekers push into 3-4.
-
-### Session Design
-- 2-5 minute encounters
-- Pick-up-and-play mobile sessions
-- No 24/7 addiction loops—enduring love, not compulsion
-
-## The Hive
-
-- Shared space (not individual bases)—guild-like, collaborative
-- Crafting: trade pollen for gear, supplies
-- Hive mates make each other sweaters, masks, salves
-- The Queen represents the aged/weak—worthy of respect and care, not a ruler
-- Elder bees teach recipes, share wisdom—contribution doesn't require foraging
-
-## MVP Scope
-
-### Target Platform
-- **WASM** (web browser)
-- 2D top-down
-- Rust + Bevy
-- Ugly placeholder graphics—prove the fun first
-
-### MVP Features
-1. Single gatherer bee, click-to-move
-2. Single flower with moving head that drops pollen
-3. Pollen collection with collision detection
-4. Allergy meter (proximity-based)
-5. Sneeze mechanic (drops collected pollen)
-6. Win/lose conditions
-7. Basic juice (particles, screen shake)
-8. Multi-head flowers
-9. Rizz system foundation
-10. AI Diva and Healer companions
-
-### Out of MVP
-- Real art (papercraft aesthetic)
-- Crafting system
-- Hive base building
-- Multiplayer
-- Multiple bee types
-- Sound/music
-
----
-
-## Development Guidelines
-
-### Architecture
-
-**Modular design is mandatory.** This codebase should be:
-- Easy for LLMs to navigate and modify
-- Easy to test in isolation
-- Easy to extend without touching unrelated code
-
-Structure code into focused modules:
-```
-src/
-├── main.rs              # App entry, plugin registration
-├── lib.rs               # Re-exports for testing
-├── game/
-│   ├── mod.rs
-│   ├── state.rs         # GameState resource, state transitions
-│   └── config.rs        # All tunable constants
-├── bee/
-│   ├── mod.rs
-│   ├── components.rs    # Bee, Role, AllergyMeter
-│   ├── movement.rs      # Movement systems
-│   ├── allergy.rs       # Allergy buildup/decay, sneeze
-│   └── actions.rs       # Wiggle, collect, etc.
-├── flower/
-│   ├── mod.rs
-│   ├── components.rs    # Flower, FlowerHead, PollenCache
-│   ├── movement.rs      # Head movement patterns
-│   ├── pollen.rs        # Pollen spawning, collection
-│   └── rizz.rs          # Rizz meter, attention behavior
-├── ai/
-│   ├── mod.rs
-│   ├── diva.rs          # Diva AI behavior
-│   └── healer.rs        # Healer AI behavior
-├── ui/
-│   ├── mod.rs
-│   ├── meters.rs        # Allergy bar, rizz displays
-│   └── hud.rs           # Score, timer, game state overlays
-└── effects/
-    ├── mod.rs
-    ├── particles.rs
-    └── juice.rs         # Screen shake, animations
-```
-
-Each module should:
-- Expose a Bevy `Plugin` that registers its systems
-- Keep components and systems together
-- Have clear boundaries—flower code doesn't reach into bee internals
-
-### Testing Strategy
-
-#### Unit Tests
-Every module should have unit tests for pure logic:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn allergy_increases_with_proximity() {
-        let mut meter = AllergyMeter::new(100.0);
-        let distance = 50.0;
-        let delta = 1.0;
-        
-        meter.update(distance, delta, &AllergyConfig::default());
-        
-        assert!(meter.value > 0.0);
-    }
-
-    #[test]
-    fn sneeze_triggers_at_threshold() {
-        let mut meter = AllergyMeter::new(100.0);
-        meter.value = 80.0;
-        
-        assert!(meter.should_sneeze(80.0));
-    }
-}
-```
-
-Test what's testable without Bevy's ECS:
-- Meter math (allergy buildup, rizz decay)
-- Movement pattern calculations
-- Collision detection geometry
-- State transitions
-- AI decision logic
-
-#### BDD for Game Behavior
-
-Use behavior-driven tests for game rules. Create a `tests/` directory with integration tests that describe behavior in plain language:
-
-```rust
-// tests/pollen_collection.rs
-
-use allerbees::prelude::*;
-use bevy::prelude::*;
-
-mod pollen_collection {
-    use super::*;
-
-    #[test]
-    fn given_bee_near_pollen_when_they_collide_then_pollen_is_collected() {
-        // Given
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-           .add_plugins(AllerbeesTestPlugin);
-        
-        let bee = app.world.spawn(BeeBundle::gatherer_at(Vec2::ZERO)).id();
-        let pollen = app.world.spawn(PollenBundle::at(Vec2::new(5.0, 0.0))).id();
-        
-        // When
-        move_bee_to(&mut app, bee, Vec2::new(5.0, 0.0));
-        app.update();
-        
-        // Then
-        assert!(app.world.get_entity(pollen).is_none(), "pollen should be despawned");
-        assert_eq!(get_collected_pollen(&app, bee), 1);
-    }
-
-    #[test]
-    fn given_bee_with_full_inventory_when_sneeze_then_drops_25_percent() {
-        // Given
-        let mut app = setup_test_app();
-        let bee = spawn_bee_with_pollen(&mut app, 20);
-        
-        // When
-        trigger_sneeze(&mut app, bee);
-        
-        // Then
-        assert_eq!(get_collected_pollen(&app, bee), 15);
-        assert_eq!(count_dropped_pollen(&app), 5);
-    }
-}
-```
-
-```rust
-// tests/rizz_system.rs
-
-mod rizz_management {
-    use super::*;
-
-    #[test]
-    fn given_low_rizz_when_head_updates_then_it_pursues_nearest_gatherer() {
-        // Given
-        let mut app = setup_test_app();
-        let head = spawn_flower_head_with_rizz(&mut app, 20.0); // Low rizz
-        let gatherer = spawn_gatherer_at(&mut app, Vec2::new(100.0, 0.0));
-        
-        // When
-        app.update(); // Run movement systems
-        
-        // Then
-        let head_pos = get_position(&app, head);
-        assert!(head_pos.x > 0.0, "head should move toward gatherer");
-    }
-
-    #[test]
-    fn given_diva_wiggles_when_in_range_then_rizz_increases() {
-        // Given
-        let mut app = setup_test_app();
-        let head = spawn_flower_head_with_rizz(&mut app, 50.0);
-        let diva = spawn_diva_at(&mut app, Vec2::new(30.0, 0.0)); // In range
-        
-        // When
-        perform_wiggle(&mut app, diva);
-        app.update();
-        
-        // Then
-        let rizz = get_rizz(&app, head);
-        assert!(rizz > 50.0, "rizz should increase from wiggle");
-    }
-    
-    #[test]
-    fn given_cache_collected_when_tickle_fires_then_nearest_head_snaps_attention() {
-        // Given
-        let mut app = setup_test_app();
-        let head = spawn_flower_head_with_rizz(&mut app, 80.0); // High rizz, blissed
-        let cache = spawn_cache_at(&mut app, Vec2::new(50.0, 50.0));
-        let gatherer = spawn_gatherer_at(&mut app, Vec2::new(50.0, 50.0));
-        
-        // When
-        collect_cache(&mut app, gatherer, cache);
-        app.update();
-        
-        // Then
-        let rizz = get_rizz(&app, head);
-        assert!(rizz < 80.0, "rizz should drop from tickle");
-        // Head should be moving toward cache location
-    }
-}
-```
-
-#### Test Helpers
-
-Create a test utilities module:
-
-```rust
-// src/testing.rs (or tests/common/mod.rs)
-
-pub struct AllerbeesTestPlugin;
-
-impl Plugin for AllerbeesTestPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_plugins(BeePlugin)
-           .add_plugins(FlowerPlugin)
-           .add_plugins(PollenPlugin)
-           // ... but NOT rendering, audio, etc.
-           .init_resource::<GameConfig>();
-    }
-}
-
-pub fn setup_test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
-       .add_plugins(AllerbeesTestPlugin);
-    app
-}
-
-pub fn spawn_gatherer_at(app: &mut App, pos: Vec2) -> Entity {
-    app.world.spawn(BeeBundle {
-        bee: Bee { role: Role::Gatherer, ..default() },
-        transform: Transform::from_translation(pos.extend(0.0)),
-        ..default()
-    }).id()
-}
-
-// ... more helpers
-```
-
-### Code Style
-
-#### Prefer Explicit Over Clever
-```rust
-// Good: Clear what's happening
-if meter.value >= config.sneeze_threshold {
-    trigger_sneeze(bee, &mut commands);
-    meter.value = config.post_sneeze_value;
-}
-
-// Avoid: Clever but obscure
-meter.maybe_sneeze(config).map(|_| commands.sneeze(bee));
-```
-
-#### Systems Should Be Small and Focused
-```rust
-// Good: One responsibility
-fn update_allergy_from_proximity(
-    mut bees: Query<(&Transform, &mut AllergyMeter), With<Bee>>,
-    heads: Query<&Transform, With<FlowerHead>>,
-    config: Res<AllergyConfig>,
-    time: Res<Time>,
-) {
-    for (bee_transform, mut meter) in &mut bees {
-        let nearest_distance = heads.iter()
-            .map(|h| bee_transform.translation.distance(h.translation))
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(f32::MAX);
-        
-        meter.update_from_proximity(nearest_distance, time.delta_seconds(), &config);
-    }
-}
-
-// Separate system for sneeze trigger
-fn check_sneeze_trigger(
-    mut bees: Query<(Entity, &mut AllergyMeter, &mut CollectedPollen)>,
-    mut commands: Commands,
-    config: Res<SneezeConfig>,
-) {
-    for (entity, mut meter, mut pollen) in &mut bees {
-        if meter.should_sneeze(config.threshold) {
-            commands.entity(entity).insert(Sneezing);
-            let dropped = pollen.drop_percentage(config.drop_percent);
-            meter.reset_to(config.post_sneeze_value);
-            // Spawn dropped pollen handled by another system reacting to Sneezing
-        }
-    }
-}
-```
-
-#### Config Is Centralized
-```rust
-// src/game/config.rs
-
-#[derive(Resource)]
-pub struct GameConfig {
-    pub allergy: AllergyConfig,
-    pub sneeze: SneezeConfig,
-    pub rizz: RizzConfig,
-    pub pollen: PollenConfig,
-    pub movement: MovementConfig,
-}
-
-#[derive(Clone)]
-pub struct AllergyConfig {
-    pub max_value: f32,              // 100.0
-    pub base_decay_rate: f32,        // 5.0 per second when safe
-    pub proximity_multiplier: f32,   // Scales buildup by 1/distance
-    pub proximity_threshold: f32,    // 200.0 - beyond this, no buildup
-}
-
-impl Default for AllergyConfig {
-    fn default() -> Self {
-        Self {
-            max_value: 100.0,
-            base_decay_rate: 5.0,
-            proximity_multiplier: 100.0,
-            proximity_threshold: 200.0,
-        }
-    }
-}
-```
-
-### Commit Hygiene
-
-When working on a moth issue:
-1. `moth start {id}` to begin
-2. Prefix all commits with `[{id}]`
-3. Small, focused commits—one logical change each
-4. `moth done` when complete
-
-Example:
-```
-[a1b2c] Add AllergyMeter component with basic fields
-[a1b2c] Implement proximity-based allergy buildup system
-[a1b2c] Add unit tests for allergy math
-[a1b2c] Wire up allergy system in BeePlugin
-```
-
-### When You're Stuck
-
-1. **Check the backlog**—`moth show` for current issue details
-2. **Run tests**—`cargo test` should always pass before moving on
-3. **Keep it ugly**—placeholder graphics are fine, fun gameplay is mandatory
-4. **Ask for smaller scope**—if an issue feels too big, it probably is
-
----
-
-## Current State (MVP Complete)
-
-The MVP is fully implemented and deployed. All 23 moth issues are complete.
-
-### Live Demo
-**https://tsmarsh.github.io/bees/**
-
-### What's Implemented
-
-#### Core Gameplay
-- **Player bee** - Yellow, click-to-move, collects pollen
-- **3-head flower** - Each head has independent movement pattern (circular, sway, figure-8)
-- **Pollen drops** - Fall from flower heads, worth 1 pollen each
-- **Stem caches** - 3 fixed positions on stem, worth 5 pollen, respawn after 10s
-- **Win condition** - Collect 20 pollen
-- **Lose condition** - 3 sneezes OR allergy meter hits 100
-
-#### Allergy/Sneeze System
-- Allergy builds when near flower heads (proximity-based)
-- Allergy decays when far from heads
-- At 80% allergy, bee sneezes and drops 25% of collected pollen
-- Visual feedback: meter color (green/yellow/red), bee tint, screen vignette
-
-#### Rizz System
-- Each flower head has rizz meter (0-100)
-- Rizz decays at 5/second
-- Low rizz (<30): head pursues nearest bee
-- High rizz (>70): head moves in lazy predictable circles ("blissed out")
-- **Wiggle action** (spacebar/right-click): builds rizz on nearby heads, 2s cooldown
-- **Tickle mechanic**: collecting stem cache drops nearest head's rizz by 30, head snaps to cache location
-
-#### AI Companions
-- **AI Diva** (purple) - Positions near heads, wiggles when any head's rizz < 50
-- **AI Healer** (green) - Moves toward player when allergy > 60%, heals 20/sec when adjacent, has 2x allergy sensitivity
-
-#### Juice/Effects
-- Sneeze: bee expansion animation, pollen scatters outward, screen shake, "ACHOO!" text
-- Collection: particle burst
-- Session timer displayed, shown on end screen
-
-### Architecture Overview
+A cooperative, family-friendly arcade game: five little bees, three completely different games, one very affectionate garden.
+The design brief is [docs/brief.md](docs/brief.md); read it before changing anything about play. How the current slice works,
+and which of the brief's open questions it answered provisionally, is in [docs/design/encounter.md](docs/design/encounter.md).
+
+## Non-negotiables (from the brief)
+
+- **No combat, villains, violence or death.** Being "out" means resting on a leaf. Flowers adore the bees.
+- **No zero-reward wipe.** Nectar carried home always counts, including partial runs and visits that end early.
+- **No role is the easy one.** Tank, healer and forager are different kinds of mastery.
+- **Solo and pickup play are first-class.** NPC bees fill every empty role; one person can always play.
+- **No rankings, no shaming.** Celebrate the team publicly ("Look what we did together!"); note personal improvement privately
+  and only when it is true.
+- **Every causal link between roles stays, and every spiral has a way back** (the stability rule, brief §3).
+- **Brief §10's open questions are not to be decided silently.** If a change settles one, say so in docs/design/encounter.md.
+
+## Architecture
 
 ```
-src/
-├── main.rs           # Scene setup, plugin registration
-├── lib.rs            # Module exports, prelude
-├── ai/
-│   ├── mod.rs        # AiPlugin
-│   ├── diva.rs       # AI Diva movement and wiggle logic
-│   └── healer.rs     # AI Healer movement and healing
-├── bee/
-│   ├── mod.rs        # BeePlugin
-│   ├── actions.rs    # Wiggle action (Wiggling, WiggleCooldown)
-│   ├── allergy.rs    # Proximity-based allergy buildup
-│   ├── collection.rs # Pollen and cache collection
-│   ├── components.rs # Bee, AllergyMeter, CollectedPollen, BeeBundle
-│   ├── movement.rs   # Click-to-move (MoveTarget)
-│   └── sneeze.rs     # Sneeze trigger and animation (Sneezing, SneezeCount)
-├── effects/
-│   ├── mod.rs        # EffectsPlugin, CollectionEvent
-│   ├── particles.rs  # Collection particle effects
-│   └── sneeze.rs     # Sneeze effects (SneezeEvent, screen shake, ACHOO text)
-├── flower/
-│   ├── mod.rs        # FlowerPlugin
-│   ├── components.rs # Flower, FlowerHead, MovementPattern, Pollen, CacheSpawnPoint
-│   ├── movement.rs   # Head movement patterns, rizz-based behavior
-│   ├── pollen.rs     # Pollen spawning, cache respawn
-│   └── rizz.rs       # Rizz system (RizzBehavior, TickleEvent, AttentionSnap)
-├── game/
-│   ├── mod.rs        # GamePlugin
-│   ├── conditions.rs # Win/lose checks
-│   ├── config.rs     # GameConfig with tunable values
-│   ├── reset.rs      # Game state reset on restart
-│   ├── state.rs      # GameState enum (Playing, Won, Lost)
-│   └── timer.rs      # Session timer
-└── ui/
-    ├── mod.rs        # UiPlugin
-    ├── meters.rs     # Allergy bar, pollen counter, danger vignette
-    └── overlay.rs    # Win/lose overlay with timer
+sim/allerbees/*.fib   the encounter simulation in fibber: the only place game rules live
+sim/wasm.fib          its exports (doubles only), built to web/sim.wasm by `make wasm`
+web/                  the game: vanilla ES modules, canvas 2D, no build step
+  js/sim/             the wasm loader, a WASI shim, layout.js (the state array, slot by slot)
+  js/views/           one file per role's game, plus the celebration
+  js/game/            event diffing, toasts (voice.js), HUD, audio, the hive's saved state
+  js/net/party.js     garden parties: PartyClient and RemoteSim (same interface as Sim)
+server/               static files + garden parties over a hand-written WebSocket (no dependencies)
+tests/                node --test: the wasm boundary and a two-person party
 ```
 
-### Key Technical Details
+- **Rules belong in the sim, play belongs in the views.** A view runs its own moment-to-moment game (turning, note timing,
+  projectile flight) and reports *decisions* as events (`tankMove`, `foragerCollect`, `salveHit`, ...). Never compute a
+  shared consequence (allergy, affection, nectar) in JavaScript.
+- **The state array is a contract.** `sim/allerbees/abi.fib` and `web/js/sim/layout.js` must agree slot for slot;
+  `tests/sim.test.mjs` checks the layout. Adding a field means: model.fib, abi.fib (`state-size` too), layout.js.
+- **New input → new event.** Add the rule to rules.fib, an export to sim/wasm.fib and the Makefile's EXPORTS, a method to
+  `Sim` and `RemoteSim`, and a seat check to `EVENTS` in server/party.mjs.
+- **What happened is a diff.** The sim keeps counters; `web/js/game/events.js` compares snapshots. Feedback text for each
+  role lives in `web/js/game/voice.js`.
+- **Tuning lives in `sim/allerbees/tune.fib`.** Run `make balance` before and after changing a number.
+- Deterministic: the sim draws chance only from the encounter's seeded generator.
 
-#### Bevy Version
-Using Bevy 0.15 with wayland feature for Linux support.
+## Working on it
 
-#### WASM Setup
-- Uses `trunk` for building/serving
-- `getrandom` with `wasm_js` feature for WASM compatibility
-- `web-sys` for console logging in WASM
-- `.cargo/config.toml` sets getrandom backend for wasm32
-
-#### CI/CD
-- GitHub Actions runs fmt, clippy, test, and WASM build
-- Requires Linux dependencies: `libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev`
-- Deploys to GitHub Pages on push to main
-
-#### Common Patterns
-- Components use `#[derive(Component, Debug, Clone, Reflect)]` for inspector support
-- Systems with complex Query types use `#[allow(clippy::type_complexity)]`
-- Events for cross-system communication (CollectionEvent, SneezeEvent, TickleEvent)
-- Timer-based animations (Sneezing, Wiggling, AttentionSnap)
-
-### What's NOT Implemented (Post-MVP)
-- Real art (currently placeholder colored shapes)
-- Sound/music
-- Crafting system
-- Hive base building
-- Multiplayer
-- Multiple bee types/roles
-- More flower types
-- Difficulty progression
-
----
-
-## Quick Reference
-
-### Build & Run
-```bash
-# Development (requires trunk: cargo install trunk)
-trunk serve
-
-# Tests
-cargo test
-
-# Check WASM builds
-trunk build
+```
+make serve                    # play at http://localhost:8080/ (and host garden parties)
+make test                     # fibber specs + node tests; both must pass before a commit (the pre-commit hook runs them)
+make wasm                     # after any change under sim/: rebuild and commit web/sim.wasm
+make balance                  # the tuning table
 ```
 
-### Key Files
-- `BACKLOG.md`—Full issue descriptions and context
-- `src/game/config.rs`—All tunable values
-- `tests/`—BDD-style integration tests
+- fibber: `fibc` 0.1.17 or later (`FIBC=...`), and `WASI_SDK` for wasm builds (fibber's `scripts/fetch-wasm-tools.sh`).
+  Read the fibber skill or the fibber repo's docs before writing fibber; `fibc test -I sim sim/specs` runs specs.
+- Specs are behaviour: `feature` / `scenario` / `given` / `upon` / `then`, and `prop` for properties over random play. A test
+  that cannot fail is worse than none: plant the fault, watch it fail, take it out.
+- In the browser, `window.__autoplay()` runs the current role's autopilot and `?fast=N` speeds up the garden.
+
+## Frontend conventions
+
+Follow the user's global rules (vanilla, accessible, responsive, paperlike semantic CSS). In this project that means:
+
+- Screens are `<section class="screen">` toggled with `hidden`; `show()` in main.js moves focus to the new screen's heading or
+  canvas and sets `document.title`.
+- Changes the player should hear about go through `Hud.toast` (an `aria-live` region). Keep them short, kind and specific
+  about *who* caused what.
+- Every role is playable by keyboard; every sound has a visual twin.
+- Art is drawn with `web/js/draw/ink.js`: bold ink outlines, flat fills, paper grain. Placeholder, with a point of view.
+- Colours are CSS custom properties in `web/css/style.css`; canvas colours are the constants at the top of ink.js.
+
+## Commit hygiene
+
+When working on a moth issue: `moth start {id}`, prefix every commit with `[{id}]`, small focused commits, `moth done` at the end.
 
 # Moth Agent Guide
 
