@@ -1,0 +1,193 @@
+;; allerbees.rules: what each role's input does to the shared encounter, and what time does to it.
+;; Every function takes an Encounter and returns the next one; none reads a clock or a random source of its own.
+(ns allerbees.rules (:require [allerbees.tune :as tune] [fib.math :as math])
+  (:use allerbees.model))
+
+(defun working? (b: Bee) -> bool (and (. b active) (= (. b status) (working))))
+(defun add-allergy (b: Bee amount: f64) -> Bee (with b (allergy (clamp (+ (. b allergy) amount) 0.0 100.0))))
+(defun spill-of (cargo: f64 fraction: f64) -> f64 (math/floor (* cargo fraction)))
+
+;; ---- tank: the performer. kind 0 tap, 1 steadying hold, 2 swirl, 3 showstopper (the group dance; needs a streak).
+(defun tank-kind-tap () -> i64 0)
+(defun tank-kind-hold () -> i64 1)
+(defun tank-kind-swirl () -> i64 2)
+(defun tank-kind-showstopper () -> i64 3)
+
+(defun kind-gain (kind: i64) -> f64
+  (cond (= kind (tank-kind-hold)) (tune/hold-gain)  (= kind (tank-kind-swirl)) (tune/swirl-gain)  :else (tune/beat-gain)))
+
+(defun with-flower-affection (e: Encounter a: f64 delight: f64) -> Encounter
+  (let [f (. e flower)]
+    (with e (flower (with f (affection (clamp a 0.0 100.0)) (delight (max (. f delight) delight)))))))
+
+(defun soothe-foragers (e: Encounter seconds: f64) -> Encounter
+  (reduce (fn (acc: Encounter i: i64)
+            (let [b (bee acc i)]
+              (if (forager? b) (with-bee acc i (with b (soothed (max (. b soothed) seconds)))) acc)))
+          e (range (tune/bee-slots))))
+
+(defun showstopper (e: Encounter tank: Bee) -> Encounter
+  (let [e1 (with-flower-affection e 100.0 1.0)
+        e2 (soothe-foragers e1 4.0)]
+    (with-bee (with e2 (showstoppers (+ (. e2 showstoppers) 1))) 0 (with tank (combo 0.0)))))
+
+(defun tank-move (e: Encounter kind: i64 quality: f64) -> Encounter
+  (let [t (bee e 0) q (clamp quality 0.0 1.0) aff (. (. e flower) affection)]
+    (cond (or (ended? e) (not (working? t))) e
+          (<= q 0.0)
+          (with-bee (with (with-flower-affection e (- aff (tune/miss-loss)) 0.0) (misses (+ (. e misses) 1)))
+                    0 (with t (combo 0.0)))
+          (and (= kind (tank-kind-showstopper)) (>= (. t combo) (tune/showstopper-combo)))
+          (showstopper (with e (beats (+ (. e beats) 1))) t)
+          :else
+          (with-bee (with (with-flower-affection e (+ aff (* q (kind-gain kind))) q) (beats (+ (. e beats) 1)))
+                    0 (with t (combo (+ (. t combo) 1.0)))))))
+
+;; ---- foragers: the flyers
+(defun forager-collect (e: Encounter i: i64 amount: f64) -> Encounter
+  (let [b (bee e i)]
+    (if (and (not (ended? e)) (forager? b) (working? b) (> amount 0.0))
+      (let [add (min amount (max 0.0 (- (. b capacity) (. b cargo))))]
+        (with-bee (with e (gathered (+ (. e gathered) add))) i (with b (cargo (+ (. b cargo) add)))))
+      e)))
+
+(defun forager-fly (e: Encounter i: i64 dist: f64) -> Encounter
+  (let [b (bee e i)]
+    (if (and (forager? b) (working? b) (> dist 0.0)) (with-bee e i (with b (distance (+ (. b distance) dist)))) e)))
+
+;; Losing the line: back to the checkpoint, a sneeze and a little spilled nectar. Most of the satchel stays.
+(defun forager-slip (e: Encounter i: i64) -> Encounter
+  (let [b (bee e i)]
+    (if (and (not (ended? e)) (forager? b) (working? b))
+      (let [spill (spill-of (. b cargo) (tune/slip-spill))
+            b2 (add-allergy (with b (cargo (- (. b cargo) spill)) (slips (+ (. b slips) 1))) (tune/slip-allergy))]
+        (with-bee (with e (spilled (+ (. e spilled) spill))) i b2))
+      e)))
+
+(defun forager-puff (e: Encounter i: i64) -> Encounter
+  (let [b (bee e i)]
+    (if (and (forager? b) (working? b))
+      (with-bee e i (add-allergy b (* (tune/puff-allergy) (- 1.0 (* (tune/soothed-shield) (if (> (. b soothed) 0.0) 1.0 0.0))))))
+      e)))
+
+;; Taking nectar home: it is banked at once (it is safe now) and the bee is away for a short trip.
+(defun forager-home (e: Encounter i: i64) -> Encounter
+  (let [b (bee e i) c (. b cargo)]
+    (if (and (not (ended? e)) (forager? b) (working? b) (> c 0.0))
+      (let [bonus (if (>= c (tune/generous-delivery)) (tune/delivery-salves) 0.0)
+            e2 (with e (bank (+ (. e bank) c)) (salves (min (tune/salve-max) (+ (. e salves) bonus))))]
+        (with-bee e2 i (with b (cargo 0.0) (banked (+ (. b banked) c)) (deliveries (+ (. b deliveries) 1))
+                             (status (home-trip)) (timer (tune/home-trip)))))
+      e)))
+
+;; ---- healer: the salve launcher
+(defun salve-throw (e: Encounter) -> Encounter
+  (if (and (not (ended? e)) (>= (. e salves) 1.0)) (with e (salves (- (. e salves) 1.0))) e))
+
+(defun soothe (b: Bee relief: f64 seconds: f64 rest-cut: f64) -> Bee
+  (let [b2 (add-allergy (with b (soothed (max (. b soothed) seconds)) (soothes (+ (. b soothes) 1))) (- 0.0 relief))]
+    (if (out? b2) (with b2 (timer (max 0.0 (- (. b2 timer) rest-cut)))) b2)))
+
+(defun salve-hit (e: Encounter i: i64 potency: f64) -> Encounter
+  (let [b (bee e i) p (clamp potency 0.0 1.0)]
+    (if (and (not (ended? e)) (. b active) (!= (. b role) (role-healer)) (> p 0.0))
+      (with-bee e i (soothe b (* p (tune/salve-relief)) (* p (tune/salve-soothe)) (* p (tune/salve-rest-cut))))
+      e)))
+
+(defun salve-cloud (e: Encounter) -> Encounter
+  (if (and (not (ended? e)) (>= (. e salves) (tune/cloud-cost)))
+    (reduce (fn (acc: Encounter i: i64)
+              (let [b (bee acc i)]
+                (if (and (. b active) (!= (. b role) (role-healer)))
+                  (with-bee acc i (soothe b (tune/cloud-relief) (tune/cloud-soothe) 0.0))
+                  acc)))
+            (with e (salves (- (. e salves) (tune/cloud-cost))) (clouds (+ (. e clouds) 1)))
+            (range (tune/bee-slots)))
+    e))
+
+;; ---- the end of a visit: whatever is carried home counts
+(defun finish (e: Encounter reason: i64) -> Encounter
+  (if (ended? e) e
+    (reduce (fn (acc: Encounter i: i64)
+              (let [b (bee acc i) c (. b cargo)]
+                (with-bee (with acc (bank (+ (. acc bank) c))) i
+                          (with b (cargo 0.0) (banked (+ (. b banked) c)) (status (finished)) (timer 0.0)))))
+            (with e (ended reason))
+            (range (tune/bee-slots)))))
+
+(defun group-home (e: Encounter) -> Encounter (finish e (ended-chose-home)))
+
+;; ---- time
+(defun soothed-active (b: Bee) -> f64 (if (> (. b soothed) 0.0) 1.0 0.0))
+
+(defun exposure (e: Encounter b: Bee) -> f64
+  (let [f (. e flower) p (. f pollen) shield (- 1.0 (* (tune/soothed-shield) (soothed-active b)))]
+    (cond (= (. b role) (role-tank)) (* p (+ 0.4 (* 0.6 (. f focus))) (tune/tank-exposure) shield)
+          (= (. b role) (role-forager))
+          (* p (- 1.0 (* (tune/focus-cover) (. f focus))) (tune/forager-exposure) (+ 1.0 (* (tune/load-exposure) (load-of b))) shield)
+          :else 0.0)))
+
+(defun advance-bee (e: Encounter i: i64 dt: f64) -> Encounter
+  (let [b0 (bee e i)
+        b (with b0 (soothed (max 0.0 (- (. b0 soothed) dt))) (timer (max 0.0 (- (. b0 timer) dt))))]
+    (cond (not (. b active)) e
+          (= (. b status) (resting))
+          (with-bee e i (if (<= (. b timer) 0.0) (with b (status (working)) (allergy (tune/after-rest-allergy))) b))
+          (= (. b status) (home-trip))
+          (let [b2 (add-allergy b (- 0.0 (* dt (tune/home-recovery-rate))))]
+            (with-bee e i (if (<= (. b2 timer) 0.0) (with b2 (status (working))) b2)))
+          (= (. b status) (working))
+          (let [b2 (add-allergy b (* dt (- (exposure e b) (tune/recovery-rate))))]
+            (if (>= (. b2 allergy) 100.0)
+              (let [spill (spill-of (. b2 cargo) (tune/tap-out-spill))]
+                (with-bee (with e (spilled (+ (. e spilled) spill))) i
+                          (with b2 (status (resting)) (timer (tune/tap-out-rest)) (combo 0.0) (cargo (- (. b2 cargo) spill)))))
+              (with-bee e i b2)))
+          :else e)))
+
+(defun party-allergy (e: Encounter) -> f64
+  (let [bs (filter (fn (b: Bee) (and (. b active) (!= (. b role) (role-healer)))) (. e bees))
+        n (count bs)]
+    (if (> n 0) (/ (reduce (fn (acc: f64 b: Bee) (+ acc (. b allergy))) 0.0 bs) (double n)) 0.0)))
+
+(defun ease (from: f64 to: f64 rate: f64 dt: f64) -> f64 (+ from (* (- to from) (min 1.0 (* rate dt)))))
+
+(defun advance-flower (e: Encounter dt: f64) -> Encounter
+  (let [f (. e flower)
+        worried (> (party-allergy e) (tune/worried-allergy))
+        base (+ (phase-pollen (. e phase)) (* 0.08 (math/sin (* 0.9 (. e t)))))
+        pollen (* (max 0.05 base) (if worried (tune/worried-relief) 1.0))
+        aff (clamp (- (. f affection) (* dt (phase-decay (. e phase)) (+ (tune/decay-floor) (/ (. f affection) 100.0)))) 0.0 100.0)
+        focus (focus-of aff)]
+    (with e (flower (with f (affection aff) (focus focus) (pollen pollen) (worried worried)
+                          (corridor (ease (. f corridor) (corridor-of focus) (tune/corridor-follow) dt))
+                          (lean (ease (. f lean) (- 1.0 focus) 1.5 dt))
+                          (delight (max 0.0 (- (. f delight) (* 2.0 dt)))))))))
+
+(defun advance-salves (e: Encounter dt: f64) -> Encounter
+  (let [period (if (has-gear? e (gear-sling)) (tune/sling-regen) (tune/salve-regen))
+        clock (+ (. e salve-clock) dt)]
+    (if (>= (. e salves) (tune/salve-max))
+      (with e (salve-clock 0.0))
+      (if (>= clock period)
+        (with e (salves (min (tune/salve-max) (+ (. e salves) 1.0))) (salve-clock (- clock period)))
+        (with e (salve-clock clock))))))
+
+(defun tank-window (e: Encounter) -> f64
+  (let [t (bee e 0)
+        sick (/ (. t allergy) 100.0)
+        base (+ (* (- 1.0 sick) (tune/window-healthy)) (* sick (tune/window-sick)))
+        soothed (if (> (. t soothed) 0.0) (tune/window-soothed) 0.0)]
+    (* (+ base soothed) (if (has-gear? e (gear-shoes)) (tune/shoes-window) 1.0))))
+
+(defun advance-clock (e: Encounter dt: f64) -> Encounter
+  (let [t (+ (. e t) dt)]
+    (with e (t t) (phase (phase-at t)) (phase-left (max 0.0 (- (phase-end t) t))) (next-phase (phase-at (phase-end t))))))
+
+;; One slice of time with no input: the flower, every bee, the salve supply, the tank's window.
+(defun advance (e: Encounter dt: f64) -> Encounter
+  (if (or (ended? e) (<= dt 0.0)) e
+    (let [e1 (advance-flower (advance-clock e dt) dt)
+          e2 (reduce (fn (acc: Encounter i: i64) (advance-bee acc i dt)) e1 (range (tune/bee-slots)))
+          e3 (advance-salves e2 dt)]
+      (with e3 (window (tank-window e3))))))

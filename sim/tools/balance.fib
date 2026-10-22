@@ -1,0 +1,43 @@
+;; sim/tools/balance.fib: whole visits with NPCs in every role, one row per seed and party size. `make balance`.
+;; The columns are what tuning needs to see: nectar home, spills, slips, tap-outs, the mean path width and the flower's mean affection.
+(ns main (:require [allerbees.tune :as tune])
+  (:use allerbees.model allerbees.encounter))
+
+(defstruct Stats (taps: i64 corridor: f64 affection: f64 tank-allergy: f64 forager-allergy: f64 n: i64))
+
+(defun forager-mean-allergy (e: Encounter) -> f64
+  (let [fs (filter forager? (. e bees))]
+    (/ (reduce (fn (a: f64 b: Bee) (+ a (. b allergy))) 0.0 fs) (double (max 1 (count fs))))))
+
+(defun outs (e: Encounter) -> i64 (count (filter out? (. e bees))))
+
+(defun visit (seed: i64 foragers: i64 human-role: i64) -> i64
+  (let [dt (/ 1.0 30.0)]
+    (loop [e (new-encounter seed foragers human-role 0) s (Stats 0 0.0 0.0 0.0 0.0 0)]
+      (if (ended? e)
+        (do (println (str "seed " seed " foragers " foragers " human " human-role
+                          " | end " (. e ended) " bank " (. e bank) " spilled " (. e spilled)
+                          " slips " (reduce (fn (a: i64 b: Bee) (+ a (. b slips))) 0 (. e bees))
+                          " tap-outs " (. s taps)
+                          " beats " (. e beats) " misses " (. e misses) " shows " (. e showstoppers) " clouds " (. e clouds)
+                          " | corridor " (/ (math-round (* 100.0 (/ (. s corridor) (double (. s n))))) 100.0)
+                          " affection " (math-round (/ (. s affection) (double (. s n))))
+                          " tank-allergy " (math-round (/ (. s tank-allergy) (double (. s n))))
+                          " forager-allergy " (math-round (/ (. s forager-allergy) (double (. s n))))))
+            (long (. e bank)))
+        (let [e2 (step e dt)
+              taps (+ (. s taps) (max 0 (- (outs e2) (outs e))))
+              f (. e2 flower)]
+          (recur e2 (Stats taps (+ (. s corridor) (. f corridor)) (+ (. s affection) (. f affection))
+                           (+ (. s tank-allergy) (. (bee e2 0) allergy)) (+ (. s forager-allergy) (forager-mean-allergy e2))
+                           (+ (. s n) 1))))))))
+
+(defun math-round (x: f64) -> f64 (double (long (+ x 0.5))))
+
+(defun main () -> i64
+  (do (doseq [n [1 3]] (doseq [seed [1 2 3 4]] (visit seed n -1)))
+      (println "-- human tank who never plays (worst case), NPCs elsewhere")
+      (doseq [seed [1 2]] (visit seed 3 0))
+      (println "-- human healer who never throws")
+      (doseq [seed [1 2]] (visit seed 3 1))
+      0))

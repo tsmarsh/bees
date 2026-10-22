@@ -1,0 +1,60 @@
+;; allerbees.abi: the encounter as a flat array of doubles, the shape it crosses into JavaScript in (web/js/layout.js mirrors it).
+;; Slots 0..16 the encounter, 17..23 the flower, 24.. five bees of 16 slots, then constants the views need (written, never read).
+(ns allerbees.abi (:require [allerbees.tune :as tune])
+  (:use allerbees.model))
+
+(defun flower-base () -> i64 17)
+(defun bee-base () -> i64 24)
+(defun bee-stride () -> i64 16)
+(defun const-base () -> i64 104)
+(defun state-size () -> i64 110)
+
+(defun slot (p: ptr i: i64) -> f64 (unsafe (load-f64 (ptr+ p (* 8 i)))))
+(defun put (p: ptr i: i64 x: f64) -> i64 (unsafe (do (store-f64 (ptr+ p (* 8 i)) x) 0)))
+(defun islot (p: ptr i: i64) -> i64 (long (slot p i)))
+(defun bslot (p: ptr i: i64) -> bool (!= (slot p i) 0.0))
+(defun b->f (x: bool) -> f64 (if x 1.0 0.0))
+
+(defun read-bee (p: ptr i: i64) -> Bee
+  (let [o (+ (bee-base) (* i (bee-stride)))]
+    (Bee (islot p o) (bslot p (+ o 1)) (bslot p (+ o 2)) (slot p (+ o 3)) (slot p (+ o 4)) (islot p (+ o 5))
+         (slot p (+ o 6)) (slot p (+ o 7)) (slot p (+ o 8)) (slot p (+ o 9)) (slot p (+ o 10))
+         (islot p (+ o 11)) (islot p (+ o 12)) (islot p (+ o 13)) (slot p (+ o 14)) (slot p (+ o 15)))))
+
+(defun write-bee (p: ptr i: i64 b: Bee) -> i64
+  (let [o (+ (bee-base) (* i (bee-stride)))]
+    (do (put p o (double (. b role))) (put p (+ o 1) (b->f (. b active))) (put p (+ o 2) (b->f (. b human)))
+        (put p (+ o 3) (. b allergy)) (put p (+ o 4) (. b soothed)) (put p (+ o 5) (double (. b status)))
+        (put p (+ o 6) (. b timer)) (put p (+ o 7) (. b cargo)) (put p (+ o 8) (. b capacity))
+        (put p (+ o 9) (. b distance)) (put p (+ o 10) (. b combo)) (put p (+ o 11) (double (. b soothes)))
+        (put p (+ o 12) (double (. b slips))) (put p (+ o 13) (double (. b deliveries)))
+        (put p (+ o 14) (. b banked)) (put p (+ o 15) (. b clock)))))
+
+(defun read-flower (p: ptr) -> Flower
+  (let [o (flower-base)]
+    (Flower (slot p o) (slot p (+ o 1)) (slot p (+ o 2)) (slot p (+ o 3)) (slot p (+ o 4)) (slot p (+ o 5)) (bslot p (+ o 6)))))
+
+(defun write-flower (p: ptr f: Flower) -> i64
+  (let [o (flower-base)]
+    (do (put p o (. f affection)) (put p (+ o 1) (. f focus)) (put p (+ o 2) (. f corridor)) (put p (+ o 3) (. f pollen))
+        (put p (+ o 4) (. f lean)) (put p (+ o 5) (. f delight)) (put p (+ o 6) (b->f (. f worried))))))
+
+(defun read-encounter (p: ptr) -> Encounter
+  (Encounter (slot p 0) (islot p 1) (islot p 2) (slot p 3) (islot p 4) (islot p 5) (slot p 6) (slot p 7) (slot p 8)
+             (slot p 9) (slot p 10) (slot p 11) (islot p 12) (islot p 13) (islot p 14) (islot p 15) (islot p 16)
+             (read-flower p) (mapv (fn (i: i64) (read-bee p i)) (range (tune/bee-slots)))))
+
+(defun write-consts (p: ptr) -> i64
+  (let [o (const-base)]
+    (do (put p o (tune/encounter-seconds)) (put p (+ o 1) (tune/salve-max)) (put p (+ o 2) (tune/showstopper-combo))
+        (put p (+ o 3) (tune/cloud-cost)) (put p (+ o 4) (tune/corridor-floor)) (put p (+ o 5) (tune/beat-interval)))))
+
+(defun write-encounter (p: ptr e: Encounter) -> i64
+  (do (put p 0 (. e t)) (put p 1 (double (. e rng))) (put p 2 (double (. e phase))) (put p 3 (. e phase-left))
+      (put p 4 (double (. e next-phase))) (put p 5 (double (. e ended))) (put p 6 (. e bank)) (put p 7 (. e spilled))
+      (put p 8 (. e gathered)) (put p 9 (. e salves)) (put p 10 (. e salve-clock)) (put p 11 (. e window))
+      (put p 12 (double (. e gear))) (put p 13 (double (. e beats))) (put p 14 (double (. e misses)))
+      (put p 15 (double (. e showstoppers))) (put p 16 (double (. e clouds)))
+      (write-flower p (. e flower))
+      (reduce (fn (acc: i64 i: i64) (+ acc (write-bee p i (bee e i)))) 0 (range (tune/bee-slots)))
+      (write-consts p)))

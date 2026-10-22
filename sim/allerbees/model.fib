@@ -1,0 +1,102 @@
+;; allerbees.model: the shared encounter state every role's game is a projection of (docs/design/encounter.md).
+;; Plain values: a step is a function from one Encounter to the next, so a run is replayable from a seed and its events.
+(ns allerbees.model (:require [allerbees.tune :as tune]))
+
+;; ---- roles, statuses, phases, end reasons, gear: small integers that the JavaScript views mirror (web/js/layout.js)
+(defun role-tank () -> i64 0)
+(defun role-healer () -> i64 1)
+(defun role-forager () -> i64 2)
+
+(defun working () -> i64 0)
+(defun resting () -> i64 1)        ; tapped out: too sneezy to go on for a moment, recovering on a leaf
+(defun home-trip () -> i64 2)      ; a forager taking nectar home
+(defun finished () -> i64 3)       ; the visit is over
+
+(defun calm () -> i64 0)
+(defun bubbly () -> i64 1)         ; the flower is excited: more pollen, attention wanders faster
+(defun sleepy () -> i64 2)         ; a breather
+(defun finale () -> i64 3)
+
+(defun not-ended () -> i64 0)
+(defun ended-sunset () -> i64 1)
+(defun ended-chose-home () -> i64 2)
+(defun ended-unwell () -> i64 3)
+
+(defun gear-satchel () -> i64 1)
+(defun gear-shoes () -> i64 2)
+(defun gear-sling () -> i64 4)
+
+(defstruct Bee (role: i64 active: bool human: bool allergy: f64 soothed: f64 status: i64 timer: f64
+                cargo: f64 capacity: f64 distance: f64 combo: f64 soothes: i64 slips: i64 deliveries: i64
+                banked: f64 clock: f64))
+
+(defstruct Flower (affection: f64 focus: f64 corridor: f64 pollen: f64 lean: f64 delight: f64 worried: bool))
+
+(defstruct Encounter (t: f64 rng: i64 phase: i64 phase-left: f64 next-phase: i64 ended: i64
+                      bank: f64 spilled: f64 gathered: f64 salves: f64 salve-clock: f64 window: f64
+                      gear: i64 beats: i64 misses: i64 showstoppers: i64 clouds: i64
+                      flower: Flower bees: (Vec Bee)))
+
+;; ---- a deterministic generator: Park and Miller's minimal standard. Products stay below 2^47, so nothing overflows.
+(defun rng-next (s: i64) -> i64 (rem (* s 48271) 2147483647))
+(defun rng-unit (s: i64) -> f64 (/ (double s) 2147483647.0))
+(defun rng-seed (seed: i64) -> i64
+  (let [s (rem (abs seed) 2147483646)] (+ s 1)))
+
+(defun clamp (x: f64 lo: f64 hi: f64) -> f64 (max lo (min hi x)))
+
+(defun has-gear? (e: Encounter g: i64) -> bool (!= 0 (bit-and (. e gear) g)))
+
+;; ---- the flower's day: phases by elapsed time. Sunny the sunflower's schedule; other flowers would bring their own.
+(defun phase-at (t: f64) -> i64
+  (cond (< t 25.0) (calm)  (< t 50.0) (bubbly)  (< t 75.0) (calm)  (< t 90.0) (sleepy)
+        (< t 120.0) (bubbly)  :else (finale)))
+
+(defun phase-end (t: f64) -> f64
+  (cond (< t 25.0) 25.0  (< t 50.0) 50.0  (< t 75.0) 75.0  (< t 90.0) 90.0  (< t 120.0) 120.0
+        :else (tune/encounter-seconds)))
+
+(defun phase-pollen (p: i64) -> f64
+  (cond (= p (bubbly)) 0.85  (= p (sleepy)) 0.2  (= p (finale)) 0.6  :else 0.45))
+
+(defun phase-decay (p: i64) -> f64
+  (cond (= p (bubbly)) 9.5  (= p (sleepy)) 4.0  (= p (finale)) 8.0  :else 7.0))
+
+;; ---- making an encounter
+(defun new-bee (role: i64 active: bool human: bool capacity: f64) -> Bee
+  (Bee role active human 0.0 0.0 (working) 0.0 0.0 capacity 0.0 0.0 0 0 0 0.0 0.0))
+
+(defun focus-of (affection: f64) -> f64
+  (clamp (/ (- affection (tune/focus-floor-affection)) (tune/focus-span)) 0.0 1.0))
+
+(defun corridor-of (focus: f64) -> f64
+  (+ (tune/corridor-floor) (* (- 1.0 (tune/corridor-floor)) focus)))
+
+;; `human-role` is the role the person in this browser plays (-1: watch everyone be NPCs); a human forager is the first forager.
+(defun new-encounter (seed: i64 foragers: i64 human-role: i64 gear: i64) -> Encounter
+  (let [cap (if (!= 0 (bit-and gear (gear-satchel))) (tune/big-satchel-capacity) (tune/satchel-capacity))
+        n (max 1 (min (tune/forager-slots) foragers))
+        f0 (focus-of (tune/affection-start))
+        bees [(new-bee (role-tank) true (= human-role (role-tank)) 0.0)
+              (new-bee (role-healer) true (= human-role (role-healer)) 0.0)
+              (new-bee (role-forager) true (= human-role (role-forager)) cap)
+              (new-bee (role-forager) (>= n 2) false cap)
+              (new-bee (role-forager) (>= n 3) false cap)]]
+    (Encounter 0.0 (rng-seed seed) (calm) (phase-end 0.0) (phase-at (phase-end 0.0)) (not-ended)
+               0.0 0.0 0.0 (tune/salve-max) 0.0 (tune/window-healthy)
+               gear 0 0 0 0
+               (Flower (tune/affection-start) f0 (corridor-of f0) (phase-pollen (calm)) 0.0 0.0 false)
+               bees)))
+
+;; ---- reading and replacing one bee
+(defun bee (e: Encounter i: i64) -> Bee (nth (. e bees) i))
+(defun with-bee (e: Encounter i: i64 b: Bee) -> Encounter (with e (bees (assoc (. e bees) i b))))
+
+(defun forager? (b: Bee) -> bool (and (. b active) (= (. b role) (role-forager))))
+(defun out? (b: Bee) -> bool (= (. b status) (resting)))
+(defun load-of (b: Bee) -> f64 (if (> (. b capacity) 0.0) (clamp (/ (. b cargo) (. b capacity)) 0.0 1.0) 0.0))
+
+(defun cargo-total (e: Encounter) -> f64
+  (reduce (fn (acc: f64 b: Bee) (+ acc (. b cargo))) 0.0 (. e bees)))
+
+(defun ended? (e: Encounter) -> bool (!= (. e ended) (not-ended)))

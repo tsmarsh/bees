@@ -1,0 +1,100 @@
+;; allerbees.npc: the bees nobody is playing. Dependable and warm, with a personality's worth of wobble; never perfect.
+;; They act through the same events a person's input makes (allergy.rules), drawing chance from the encounter's own generator.
+(ns allerbees.npc (:require [allerbees.tune :as tune])
+  (:use allerbees.model allerbees.rules))
+
+;; A draw: the next generator state and a number in (0, 1).
+(defstruct Draw (e: Encounter u: f64))
+(defun draw (e: Encounter) -> Draw
+  (let [s (rng-next (. e rng))] (Draw (with e (rng s)) (rng-unit s))))
+
+(defun npc? (b: Bee) -> bool (and (. b active) (not (. b human))))
+
+;; ---- the NPC tank: a beat every beat, quality wobbling with allergy; the steadying hold when attention is low.
+(defun npc-tank-beat (e: Encounter) -> Encounter
+  (let [d (draw (with-bee e 0 (with (bee e 0) (clock (- (. (bee e 0) clock) (tune/beat-interval))))))
+        e1 (. d e) t (bee e1 0)
+        q (+ (tune/npc-tank-skill) (* -0.45 (/ (. t allergy) 100.0)) (* 0.8 (- (. d u) 0.5)))
+        quality (if (< q 0.4) 0.0 (min 1.0 q))]
+    (cond (>= (. t combo) (tune/showstopper-combo)) (tank-move e1 (tank-kind-showstopper) 1.0)
+          (< (. (. e1 flower) affection) 30.0) (tank-move e1 (tank-kind-hold) (max quality 0.5))
+          :else (tank-move e1 (tank-kind-tap) quality))))
+
+(defun npc-tank (e: Encounter dt: f64) -> Encounter
+  (let [t (bee e 0)]
+    (if (and (npc? t) (working? t))
+      (let [e1 (with-bee e 0 (with t (clock (+ (. t clock) dt))))]
+        (if (>= (. (bee e1 0) clock) (tune/beat-interval)) (npc-tank-beat e1) e1))
+      e)))
+
+;; ---- an NPC forager: flies, gathers at a rate the path's width allows, sometimes slips, goes home sensibly.
+(defun npc-forager-gather (e: Encounter i: i64 dt: f64) -> Encounter
+  (let [b (bee e i)
+        f (. e flower)
+        rate (* (tune/npc-collect-rate) (+ 0.55 (* 0.45 (. f corridor))))
+        clock (+ (. b clock) (* rate dt))
+        e1 (forager-fly (with-bee e i (with b (clock (if (>= clock 1.0) (- clock 1.0) clock))))
+                        i (* dt (tune/npc-forager-speed) (- 1.0 (* 0.3 (load-of b)))))]
+    (if (>= clock 1.0) (forager-collect e1 i 1.0) e1)))
+
+(defun slip-hazard (e: Encounter b: Bee) -> f64
+  (+ 0.01 (* 0.07 (- 1.0 (. (. e flower) corridor))) (* 0.06 (/ (. b allergy) 100.0)) (* 0.03 (load-of b))
+     (* 0.05 (- 1.0 (tune/npc-forager-skill)))))
+
+(defun npc-forager-risks (e: Encounter i: i64 dt: f64) -> Encounter
+  (let [d1 (draw e) e1 (. d1 e) b (bee e1 i)]
+    (if (< (. d1 u) (* dt (slip-hazard e1 b)))
+      (forager-slip e1 i)
+      (let [d2 (draw e1)]
+        (if (< (. d2 u) (* dt 0.06 (. (. e1 flower) pollen))) (forager-puff (. d2 e) i) (. d2 e))))))
+
+(defun npc-forager (e: Encounter i: i64 dt: f64) -> Encounter
+  (let [b (bee e i)]
+    (cond (not (and (npc? b) (forager? b) (working? b))) e
+          (or (>= (load-of b) (tune/npc-home-load))
+              (and (>= (. b allergy) (tune/npc-home-allergy)) (>= (. b cargo) 3.0)))
+          (forager-home e i)
+          :else (npc-forager-risks (npc-forager-gather e i dt) i dt))))
+
+;; ---- the NPC healer: the bee who needs it most, or a little prevention before the flower gets bubbly.
+(defun need (b: Bee) -> f64
+  (cond (not (. b active)) -1.0
+        (= (. b role) (role-healer)) -1.0
+        (= (. b status) (resting)) (+ 100.0 (. b timer))
+        (= (. b status) (working)) (if (>= (. b allergy) (tune/npc-healer-threshold)) (. b allergy) -1.0)
+        :else -1.0))
+
+(defun neediest (e: Encounter) -> i64
+  (reduce (fn (best: i64 i: i64) (if (> (need (bee e i)) (need (bee e best))) i best)) 0 (range (tune/bee-slots))))
+
+(defun crowd-in-need (e: Encounter) -> i64
+  (count (filter (fn (b: Bee) (and (working? b) (!= (. b role) (role-healer)) (>= (. b allergy) 55.0))) (. e bees))))
+
+(defun npc-throw (e: Encounter target: i64) -> Encounter
+  (let [d (draw (salve-throw e))]
+    (salve-hit (. d e) target (if (< (. d u) (tune/npc-healer-aim)) 1.0 0.4))))
+
+(defun npc-healer-act (e: Encounter) -> Encounter
+  (let [target (neediest e)
+        tank (bee e 0)]
+    (cond (and (>= (crowd-in-need e) 3) (>= (. e salves) (tune/cloud-cost))) (salve-cloud e)
+          (>= (need (bee e target)) 0.0) (npc-throw e target)
+          (and (= (. e next-phase) (bubbly)) (< (. e phase-left) 3.0) (working? tank) (<= (. tank soothed) 0.0))
+          (npc-throw e 0)
+          :else e)))
+
+(defun npc-healer (e: Encounter dt: f64) -> Encounter
+  (let [h (bee e 1)]
+    (if (npc? h)
+      (let [clock (+ (. h clock) dt)]
+        (if (and (>= clock (tune/npc-healer-interval)) (>= (. e salves) 1.0))
+          (let [e1 (npc-healer-act e)]
+            (with-bee e1 1 (with (bee e1 1) (clock (if (= (. e1 salves) (. e salves)) (tune/npc-healer-interval) 0.0)))))
+          (with-bee e 1 (with h (clock (min clock (tune/npc-healer-interval)))))))
+      e)))
+
+(defun npcs (e: Encounter dt: f64) -> Encounter
+  (if (ended? e) e
+    (let [e1 (npc-tank e dt)
+          e2 (reduce (fn (acc: Encounter i: i64) (npc-forager acc i dt)) e1 [2 3 4])]
+      (npc-healer e2 dt))))

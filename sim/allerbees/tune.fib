@@ -1,0 +1,74 @@
+;; allerbees.tune: every tunable number of the encounter, in one place (CLAUDE.md: config is centralised).
+;; Units: seconds, nectar drops, and 0..100 meters. Change a number here, run `make balance`, read the table.
+(ns allerbees.tune)
+
+;; ---- the encounter
+(defun encounter-seconds () -> f64 150.0)
+(defun forager-slots () -> i64 3)
+(defun bee-slots () -> i64 5)                 ; tank, healer, three foragers
+
+;; ---- the flower's attention
+(defun affection-start () -> f64 55.0)
+(defun focus-floor-affection () -> f64 15.0)   ; below this the flower is all curiosity
+(defun focus-span () -> f64 70.0)              ; affection over the floor that reaches full focus
+(defun corridor-floor () -> f64 0.45)          ; the narrowest a forager path ever gets (stability rule)
+(defun corridor-follow () -> f64 2.0)          ; how quickly paths ease toward the flower's focus, per second
+(defun beat-gain () -> f64 7.0)                ; affection for a perfect tap
+(defun hold-gain () -> f64 5.0)                ; the steadying hold: smaller, far more forgiving
+(defun swirl-gain () -> f64 10.0)              ; a traced swirl
+(defun miss-loss () -> f64 5.0)
+(defun decay-floor () -> f64 0.4)             ; affection fades at phase-decay x (floor + affection/100): delight is harder to hold the higher it is
+(defun showstopper-combo () -> f64 20.0)       ; a streak this long unlocks the group dance
+(defun worried-allergy () -> f64 60.0)         ; party average above this: the flower holds her breath
+(defun worried-relief () -> f64 0.7)           ; pollen multiplier while she does
+
+;; ---- pollen and allergy
+(defun recovery-rate () -> f64 1.2)            ; every bee's own resilience, per second
+(defun home-recovery-rate () -> f64 8.0)       ; a forager on a trip home breathes clean air
+(defun tank-exposure () -> f64 9.0)
+(defun forager-exposure () -> f64 7.0)
+(defun focus-cover () -> f64 0.65)            ; how much of a forager's exposure full focus on the tank takes away
+(defun load-exposure () -> f64 0.5)            ; a full satchel adds half again to exposure
+(defun soothed-shield () -> f64 0.6)           ; a soothed bee takes this much less pollen
+(defun tap-out-rest () -> f64 5.0)
+(defun after-rest-allergy () -> f64 40.0)
+(defun slip-allergy () -> f64 12.0)
+(defun slip-spill () -> f64 0.2)               ; of the cargo, rounded down
+(defun tap-out-spill () -> f64 0.15)
+(defun puff-allergy () -> f64 9.0)
+
+;; ---- the tank's rhythm window, in seconds either side of the beat
+(defun window-healthy () -> f64 0.16)
+(defun window-sick () -> f64 0.085)
+(defun window-soothed () -> f64 0.04)
+(defun shoes-window () -> f64 1.25)
+
+;; ---- foragers
+(defun satchel-capacity () -> f64 30.0)
+(defun big-satchel-capacity () -> f64 45.0)
+(defun home-trip () -> f64 3.0)
+(defun generous-delivery () -> f64 20.0)       ; banking this much at once sends the healer honey for salves
+(defun delivery-salves () -> f64 2.0)
+
+;; ---- healer
+(defun salve-max () -> f64 5.0)
+(defun salve-regen () -> f64 1.7)              ; seconds per salve
+(defun sling-regen () -> f64 1.3)
+(defun salve-relief () -> f64 34.0)
+(defun salve-soothe () -> f64 6.0)
+(defun salve-rest-cut () -> f64 2.0)           ; a salve on a resting bee shortens the rest
+(defun cloud-cost () -> f64 3.0)
+(defun cloud-relief () -> f64 14.0)
+(defun cloud-soothe () -> f64 3.0)
+
+;; ---- NPCs: dependable, warm, not superhuman
+(defun beat-interval () -> f64 0.5769)         ; 104 beats a minute
+(defun npc-tank-skill () -> f64 0.72)
+(defun npc-forager-skill () -> f64 0.7)
+(defun npc-forager-speed () -> f64 140.0)
+(defun npc-collect-rate () -> f64 1.15)        ; nectar a second on a wide path
+(defun npc-home-load () -> f64 0.8)            ; head home at this fraction of capacity
+(defun npc-home-allergy () -> f64 72.0)
+(defun npc-healer-interval () -> f64 1.6)
+(defun npc-healer-threshold () -> f64 30.0)
+(defun npc-healer-aim () -> f64 0.8)

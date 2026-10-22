@@ -1,0 +1,140 @@
+;; The encounter's rules as behaviour: what each role's play does to the others, and the brief's promises
+;; (no zero-reward wipe, bounded setbacks, no doom spiral). `make specs`.
+(ns main (:require [allerbees.tune :as tune])
+  (:use fib.test.core fib.test.gen fib.test.run allerbees.model allerbees.rules allerbees.npc allerbees.encounter))
+
+(defun seeds () -> (Gen i64) (gen-i64-between 1 1000000))
+(defun dt () -> f64 (/ 1.0 30.0))
+(defun human-forager (seed: i64) -> Encounter (new-encounter seed 3 (role-forager) 0))
+(defun human-tank (seed: i64) -> Encounter (new-encounter seed 1 (role-tank) 0))
+(defun human-healer (seed: i64) -> Encounter (new-encounter seed 1 (role-healer) 0))
+
+(defun with-affection (e: Encounter a: f64) -> Encounter
+  (let [f (. e flower)] (with e (flower (with f (affection a) (focus (focus-of a)) (corridor (corridor-of (focus-of a))))))))
+
+(defun ticks (e: Encounter n: i64) -> Encounter (loop [x e i 0] (if (>= i n) x (recur (step x (dt)) (+ i 1)))))
+
+(defun carried (e: Encounter) -> f64 (cargo-total e))
+(defun conserved? (e: Encounter) -> bool
+  (< (abs (- (. e gathered) (+ (. e bank) (. e spilled) (carried e)))) 1.0e-9))
+(defun in-range? (x: f64 lo: f64 hi: f64) -> bool (and (>= x lo) (<= x hi)))
+(defun bounded? (e: Encounter) -> bool
+  (and (every? (fn (b: Bee) (and (in-range? (. b allergy) 0.0 100.0) (>= (. b cargo) 0.0))) (. e bees))
+       (in-range? (. (. e flower) affection) 0.0 100.0)
+       (in-range? (. (. e flower) corridor) (tune/corridor-floor) 1.0)
+       (>= (. e window) (* 0.99 (tune/window-sick)))
+       (in-range? (. e salves) 0.0 (tune/salve-max))))
+
+;; A messy human: every role's input, chosen by a generator, between ticks.
+(defun chaos (e: Encounter s: i64) -> Encounter
+  (let [k (rem s 9) i (+ 2 (rem (quot s 9) 3))]
+    (cond (= k 0) (tank-move e (rem s 4) (rng-unit (rng-next s)))
+          (= k 1) (tank-move e 0 0.0)
+          (= k 2) (forager-collect e i 1.0)
+          (= k 3) (forager-slip e i)
+          (= k 4) (forager-home e i)
+          (= k 5) (forager-puff e i)
+          (= k 6) (salve-hit (salve-throw e) (rem s 5) 1.0)
+          (= k 7) (salve-cloud e)
+          :else (forager-collect e i 3.0))))
+
+(defun chaotic-visit (seed: i64) -> (Vec Encounter)
+  (loop [e (new-encounter seed 3 (role-forager) 0) s (rng-seed seed) out []]
+    (if (ended? e) (conj out e)
+      (let [s2 (rng-next s)]
+        (recur (step (chaos e s2) (dt)) s2 (if (= 0 (rem (count out) 1)) (conj out e) out))))))
+
+(defspecs-main specs
+  (feature "the tank's performance shapes the foragers' paths"
+    (scenario "a delighted flower opens wide paths"
+      (given [e (with-affection (human-tank 1) 90.0)])
+      (then (expect = true (> (. (. e flower) corridor) 0.95))))
+    (scenario "a miss lets the flower's attention wander, and paths narrow as she looks around"
+      (given [e (with-affection (human-tank 1) 60.0)])
+      (upon [missed (ticks (tank-move (tank-move (tank-move e 0 0.0) 0 0.0) 0 0.0) 30)
+             kept (ticks (tank-move (tank-move (tank-move e 0 1.0) 0 1.0) 0 1.0) 30)])
+      (then (expect = true (< (. (. missed flower) corridor) (. (. kept flower) corridor)))
+            (expect = 0.0 (. (bee missed 0) combo))))
+    (scenario "even a flower with no attention left for the tank leaves a path the foragers can fly"
+      (given [e (with-affection (human-tank 1) 0.0)])
+      (upon [later (ticks e 300)])
+      (then (expect = true (>= (. (. later flower) corridor) (tune/corridor-floor)))))
+    (scenario "a long streak unlocks the showstopper: full delight and a soothing moment for every forager"
+      (given [e (loop [x (human-forager 2) i 0] (if (>= i 20) x (recur (tank-move x 0 1.0) (+ i 1))))])
+      (upon [shown (tank-move e (tank-kind-showstopper) 1.0)])
+      (then (expect = 100.0 (. (. shown flower) affection))
+            (expect = true (> (. (bee shown 2) soothed) 0.0))
+            (expect = 1 (. shown showstoppers))))
+    (scenario "being adored has a cost: the tank breathes more pollen when the flower is focused on them"
+      (given [e (new-encounter 1 1 (role-tank) 0)])
+      (upon [adored (ticks (with-affection e 100.0) 60) ignored (ticks (with-affection e 0.0) 60)])
+      (then (expect = true (> (. (bee adored 0) allergy) (. (bee ignored 0) allergy))))))
+
+  (feature "foragers carry nectar, and setbacks are bounded"
+    (scenario "a slip spills a fifth of the satchel, rounded down, and keeps the rest"
+      (given [e (forager-collect (human-forager 1) 2 20.0)])
+      (upon [s (forager-slip e 2)])
+      (then (expect = 16.0 (. (bee s 2) cargo))
+            (expect = 4.0 (. s spilled))
+            (expect = (tune/slip-allergy) (. (bee s 2) allergy))))
+    (scenario "a satchel never holds more than its capacity"
+      (given [e (forager-collect (human-forager 1) 2 500.0)])
+      (then (expect = (tune/satchel-capacity) (. (bee e 2) cargo))))
+    (scenario "taking nectar home banks it at once and the bee comes back after a short trip"
+      (given [e (forager-collect (human-forager 1) 2 12.0)])
+      (upon [home (forager-home e 2) back (ticks (forager-home e 2) 120)])
+      (then (expect = 12.0 (. home bank))
+            (expect = (home-trip) (. (bee home 2) status))
+            (expect = (working) (. (bee back 2) status))))
+    (scenario "a generous delivery sends honey to the healer for salves"
+      (given [e (forager-collect (salve-throw (salve-throw (salve-throw (human-forager 1)))) 2 25.0)])
+      (upon [home (forager-home e 2)])
+      (then (expect = (+ (. e salves) (tune/delivery-salves)) (. home salves))))
+    (scenario "a tapped-out bee rests, keeps most of its satchel and comes back"
+      (given [e (forager-collect (human-forager 1) 2 20.0)
+              sick (with-bee e 2 (with (bee e 2) (allergy 99.9)))])
+      (upon [out (ticks (forager-puff sick 2) 1) back (ticks (forager-puff sick 2) 200)])
+      (then (expect = (resting) (. (bee out 2) status))
+            (expect = 17.0 (. (bee out 2) cargo))
+            (expect = (working) (. (bee back 2) status)))))
+
+  (feature "the healer's care reaches every other game"
+    (scenario "a salve on the tank widens their rhythm window"
+      (given [e (advance (with-bee (human-healer 1) 0 (with (bee (human-healer 1) 0) (allergy 80.0))) (dt))])
+      (upon [cared (advance (salve-hit (salve-throw e) 0 1.0) (dt))])
+      (then (expect = true (> (. cared window) (. e window)))))
+    (scenario "a salve on a resting bee shortens the rest"
+      (given [e (with-bee (human-healer 1) 2 (with (bee (human-healer 1) 2) (status (resting)) (timer 5.0)))])
+      (upon [cared (salve-hit e 2 1.0)])
+      (then (expect = 3.0 (. (bee cared 2) timer))))
+    (scenario "with no salves left, a throw does nothing, and the supply refills by itself"
+      (given [empty (loop [x (human-healer 1) i 0] (if (>= i 5) x (recur (salve-throw x) (+ i 1))))])
+      (upon [again (salve-throw empty) later (ticks empty 120)])
+      (then (expect = 0.0 (. again salves))
+            (expect = true (>= (. later salves) 2.0))))
+    (scenario "the honey cloud costs three salves and soothes everyone at once"
+      (given [e (human-healer 1)])
+      (upon [c (salve-cloud e)])
+      (then (expect = (- (tune/salve-max) (tune/cloud-cost)) (. c salves))
+            (expect = true (and (> (. (bee c 0) soothed) 0.0) (> (. (bee c 2) soothed) 0.0)))
+            (expect = 0.0 (. (bee c 1) soothed)))))
+
+  (feature "every visit counts"
+    (scenario "the sun sets on a visit and everything carried is banked"
+      (given [e (forager-collect (human-forager 4) 2 9.0)])
+      (upon [done (run-for e 200.0 (dt))])
+      (then (expect = (ended-sunset) (. done ended))
+            (expect = 0.0 (carried done))
+            (expect = true (>= (. done bank) 9.0))))
+    (scenario "nobody playing the tank still brings nectar home"
+      (given [e (new-encounter 3 3 (role-tank) 0)])
+      (upon [done (run-for e 200.0 (dt))])
+      (then (expect = true (> (. done bank) 100.0))))
+    (prop "nectar is conserved through any mix of play" [seed (seeds)]
+      (every? conserved? (chaotic-visit seed)))
+    (prop "every meter stays in its bounds through any mix of play" [seed (seeds)]
+      (every? bounded? (chaotic-visit seed)))
+    (prop "an NPC party never ends a visit too unwell to continue" [seed (seeds)]
+      (= (ended-sunset) (. (run-for (new-encounter seed 3 -1 0) 200.0 (dt)) ended)))
+    (prop "the same seed gives the same visit" [seed (seeds)]
+      (= (. (run-for (new-encounter seed 3 -1 0) 60.0 (dt)) rng) (. (run-for (new-encounter seed 3 -1 0) 60.0 (dt)) rng)))))

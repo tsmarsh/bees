@@ -1,0 +1,24 @@
+;; sim/wasm.fib: the exports the browser calls (docs/design/encounter.md, "The boundary"). Built by `make wasm` into web/sim.wasm.
+;; Every argument and result is a double, so JavaScript never meets a BigInt. Each call reads the state array, applies one
+;; pure function from allerbees.*, and writes the array back: the JavaScript side owns the memory, the sim owns the rules.
+(ns main (:use allerbees.model allerbees.rules allerbees.encounter allerbees.abi))
+
+(defun apply-to (p: ptr f: (fn (Encounter) Encounter)) -> f64
+  (do (write-encounter p (f (read-encounter p))) (double (. (read-encounter p) ended))))
+
+(defun sim-state-size () -> f64 (double (state-size)))
+
+(defun sim-init (p: ptr seed: f64 foragers: f64 human-role: f64 gear: f64) -> f64
+  (do (write-encounter p (new-encounter (long seed) (long foragers) (long human-role) (long gear))) 0.0))
+
+(defun sim-step (p: ptr dt: f64) -> f64 (apply-to p (fn (e: Encounter) (step e dt))))
+(defun sim-tank-move (p: ptr kind: f64 quality: f64) -> f64 (apply-to p (fn (e: Encounter) (tank-move e (long kind) quality))))
+(defun sim-forager-collect (p: ptr i: f64 amount: f64) -> f64 (apply-to p (fn (e: Encounter) (forager-collect e (long i) amount))))
+(defun sim-forager-fly (p: ptr i: f64 dist: f64) -> f64 (apply-to p (fn (e: Encounter) (forager-fly e (long i) dist))))
+(defun sim-forager-slip (p: ptr i: f64) -> f64 (apply-to p (fn (e: Encounter) (forager-slip e (long i)))))
+(defun sim-forager-puff (p: ptr i: f64) -> f64 (apply-to p (fn (e: Encounter) (forager-puff e (long i)))))
+(defun sim-forager-home (p: ptr i: f64) -> f64 (apply-to p (fn (e: Encounter) (forager-home e (long i)))))
+(defun sim-salve-throw (p: ptr) -> f64 (apply-to p salve-throw))
+(defun sim-salve-hit (p: ptr i: f64 potency: f64) -> f64 (apply-to p (fn (e: Encounter) (salve-hit e (long i) potency))))
+(defun sim-salve-cloud (p: ptr) -> f64 (apply-to p salve-cloud))
+(defun sim-group-home (p: ptr) -> f64 (apply-to p group-home))

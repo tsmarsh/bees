@@ -1,0 +1,22 @@
+;; allerbees.encounter: one tick of the authoritative encounter. Time first, then the NPCs' choices, then the end of the visit.
+(ns allerbees.encounter (:require [allerbees.tune :as tune])
+  (:use allerbees.model allerbees.rules allerbees.npc))
+
+;; Too unwell to continue: the tank and every forager resting at once. The care in the rules makes it rare; it still ends kindly.
+(defun all-out? (e: Encounter) -> bool
+  (let [fs (filter forager? (. e bees))]
+    (and (out? (bee e 0)) (> (count fs) 0) (every? out? fs))))
+
+(defun check-end (e: Encounter) -> Encounter
+  (cond (ended? e) e
+        (>= (. e t) (tune/encounter-seconds)) (finish e (ended-sunset))
+        (all-out? e) (finish e (ended-unwell))
+        :else e))
+
+(defun step (e: Encounter dt: f64) -> Encounter
+  (check-end (npcs (advance e dt) dt)))
+
+;; Runs a whole visit with no input but the NPCs': the balance tool and the specs use it.
+(defun run-for (e: Encounter seconds: f64 dt: f64) -> Encounter
+  (loop [x e left seconds]
+    (if (or (<= left 0.0) (ended? x)) x (recur (step x (min dt left)) (- left dt)))))

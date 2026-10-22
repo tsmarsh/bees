@@ -1,9 +1,6 @@
-# Rust
-/target/
-Cargo.lock
-
-# Trunk/WASM
-/dist/
+# fibc intermediates
+*.lair.o
+*.liro
 
 # IDE
 .idea/
