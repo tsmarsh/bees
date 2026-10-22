@@ -565,6 +565,9 @@ export class ForagerView {
       else ink.label(ctx, this.banner.text, w / 2, h * 0.18, Math.min(26, w / 18), "#fff6dc");
     }
     if (this.mode === "ready") ink.label(ctx, "Ready…", w / 2, h * 0.5, Math.min(40, w / 10), ink.HONEY);
+    if (this.t < 6 && (this.mode === "ready" || this.mode === "flying")) {
+      ink.label(ctx, "Tap to turn. Stay on the path!", w / 2, h * 0.88, Math.min(22, w / 18), "#fff6dc");
+    }
     if (this.mode === "home") {
       ctx.fillStyle = "rgba(243,231,207,0.85)";
       ctx.fillRect(0, 0, w, h);
