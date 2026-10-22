@@ -20,6 +20,7 @@ export class Socket extends EventEmitter {
   }
 
   read(data) {
+    if (!this.open) return;
     this.buf = Buffer.concat([this.buf, data]);
     while (this.buf.length >= 2) {
       const b0 = this.buf[0], b1 = this.buf[1];
@@ -36,7 +37,7 @@ export class Socket extends EventEmitter {
       const payload = Buffer.from(this.buf.subarray(off + 4, off + 4 + len));
       for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
       this.buf = this.buf.subarray(off + 4 + len);
-      if (op === 0x8) { this.close(1000); return; }
+      if (op === 0x8) { this.close(1000); this.buf = Buffer.alloc(0); return; }
       if (op === 0x9) { this.frame(0xa, payload); continue; }
       if (op === 0xa) continue;
       if (op === 0x1 || op === 0x2 || op === 0x0) {

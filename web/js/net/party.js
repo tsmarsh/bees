@@ -22,18 +22,23 @@ export class RemoteSim {
     this.flyPending = new Map();
   }
 
+  // Salves spent here but not yet seen spent by the server. A state that shows fewer salves than the one before has
+  // caught up with that many throws; anything older than half a second has surely been seen (or refused).
   receive(state) {
+    const dropped = Math.max(0, Math.round(this.cur[E.salves] - state[E.salves]));
+    this.pending = (this.pending || []).slice(Math.min(dropped, (this.pending || []).length));
+    const now = performance.now();
+    this.pending = this.pending.filter((at) => now - at < 500);
     this.prev = this.cur;
     this.cur = state;
-    this.at = performance.now();
-    this.salvesSpent = 0;
+    this.at = now;
   }
 
   get s() {
     const k = Math.min(1, (performance.now() - this.at) / INTERP_MS);
     this.view.set(this.cur);
     for (const i of SMOOTH) this.view[i] = this.prev[i] + (this.cur[i] - this.prev[i]) * k;
-    this.view[E.salves] = Math.max(0, this.cur[E.salves] - (this.salvesSpent || 0));
+    this.view[E.salves] = Math.max(0, this.cur[E.salves] - (this.pending?.length || 0));
     return this.view;
   }
 
@@ -59,14 +64,14 @@ export class RemoteSim {
   // spend the same one; the next state from the server settles the count.
   salveThrow() {
     if (this.s[E.salves] < 1 || this.cur[E.ended]) return false;
-    this.salvesSpent = (this.salvesSpent || 0) + 1;
+    (this.pending ||= []).push(performance.now());
     this.send("salveThrow");
     return true;
   }
   salveHit(i, potency) { this.send("salveHit", i, potency); }
   salveCloud() {
     if (this.s[E.salves] < this.konst("cloudCost")) return false;
-    this.salvesSpent = (this.salvesSpent || 0) + this.konst("cloudCost");
+    for (let k = 0; k < this.konst("cloudCost"); k++) (this.pending ||= []).push(performance.now());
     this.send("salveCloud");
     return true;
   }

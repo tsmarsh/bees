@@ -218,9 +218,12 @@ function headHome() {
   resume();
 }
 
+function closePause() { if ($("pause-dialog").open) $("pause-dialog").close(); }
+
 function finishVisit() {
   const v = app.visit;
   v.done = true;
+  closePause();
   app.audio.stop();
   const s = app.sim.snapshot();
   const bank = Math.floor(s[E.bank]);
@@ -295,8 +298,9 @@ function wire() {
   $("head-home").addEventListener("click", headHome);
   $("pause-dialog").addEventListener("cancel", (e) => { e.preventDefault(); resume(); });
   $("visit-again").addEventListener("click", () => {
-    if (app.party) { if (app.party.lobby?.host) app.party.say({ t: "again" }); showLobby(); }
-    else startVisit(app.hive.role, app.hive.foragers);
+    if (!app.visit?.party) startVisit(app.hive.role, app.hive.foragers);
+    else if (app.party) { if (app.party.lobby?.host) app.party.say({ t: "again" }); showLobby(); }
+    else { showHive(); partyNote("The party's connection was lost. Start or join again any time."); }
   });
   $("back-to-hive").addEventListener("click", () => { leaveParty(); showHive(); });
   $("leave-visit").addEventListener("click", () => { if ($("pause-dialog").open) $("pause-dialog").close(); endVisitView(); leaveParty(); showHive(); });
@@ -316,6 +320,7 @@ function wire() {
     $("celebrate-status").textContent = "High five! Everyone high-fives you back.";
   });
   document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
+  for (const type of ["pointerdown", "keydown"]) window.addEventListener(type, () => { if (app.visit && !app.visit.done) app.audio.ensure(); }, { capture: true });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && app.visit && !app.visit.done && !app.visit.paused) { e.preventDefault(); pause(); }
   });
@@ -376,7 +381,11 @@ function watchParty(client) {
   client.addEventListener("lobby", (e) => onLobby(e.detail));
   client.addEventListener("state", () => maybeJoinVisit());
   client.addEventListener("cheer", (e) => { if (e.detail.seat !== app.visit?.you) receiveCheer(e.detail.seat); });
-  client.addEventListener("error", (e) => { partyNote(e.detail.text); $("lobby-status").textContent = e.detail.text; });
+  client.addEventListener("error", (e) => {
+    partyNote(e.detail.text);
+    $("lobby-status").textContent = e.detail.text;
+    if (!client.code && app.party === client) leaveParty();   // never got into a room
+  });
   client.addEventListener("closed", () => {
     if (app.party !== client) return;
     app.party = null;
@@ -396,7 +405,7 @@ function leaveParty() {
 function onLobby(lobby) {
   partyNote("");
   const inVisit = app.visit && app.visit.party && !app.visit.done;
-  if (inVisit) return;
+  if (inVisit) { $("head-home").hidden = !lobby.host; return; }
   if (!$("screen-celebrate").hidden && lobby.phase !== "visit") return;
   if (lobby.phase === "visit" && app.party.mySeat !== null) { maybeJoinVisit(); return; }
   if ($("screen-lobby").hidden) showLobby();
@@ -463,6 +472,7 @@ function endVisitView() {
   const v = app.visit;
   if (!v || v.done) return;
   v.done = true;
+  closePause();
   app.audio.stop();
   if (app.view) { app.view.dispose(); app.view = null; }
 }

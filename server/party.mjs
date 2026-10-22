@@ -15,16 +15,18 @@ const CHEERS = ["heart", "highfive", "wow", "thanks"];
 const exportsPromise = loadSim(readFileSync(new URL("../web/sim.wasm", import.meta.url)));
 
 // Who may send which event, and how to check its arguments.
+// `perSecond` caps how often an honest game could send each event (with room to spare), so a modified client can't
+// flood Sunny with affection or the pot with nectar.
 const EVENTS = {
-  tankMove: { seat: (s) => s === 0, args: 2 },
-  foragerCollect: { seat: (s, a) => s >= 2 && a[0] === s, args: 2, check: (a) => a[1] > 0 && a[1] <= 3 },
-  foragerFly: { seat: (s, a) => s >= 2 && a[0] === s, args: 2, check: (a) => a[1] >= 0 && a[1] <= 60 },
-  foragerSlip: { seat: (s, a) => s >= 2 && a[0] === s, args: 1 },
-  foragerPuff: { seat: (s, a) => s >= 2 && a[0] === s, args: 1 },
-  foragerHome: { seat: (s, a) => s >= 2 && a[0] === s, args: 1 },
-  salveThrow: { seat: (s) => s === 1, args: 0 },
-  salveHit: { seat: (s) => s === 1, args: 2, check: (a) => a[0] >= 0 && a[0] <= 4 },
-  salveCloud: { seat: (s) => s === 1, args: 0 },
+  tankMove: { seat: (s) => s === 0, args: 2, perSecond: 8, check: (a) => Number.isInteger(a[0]) && a[0] >= 0 && a[0] <= 3 },
+  foragerCollect: { seat: (s, a) => s >= 2 && a[0] === s, args: 2, perSecond: 12, check: (a) => a[1] > 0 && a[1] <= 3 },
+  foragerFly: { seat: (s, a) => s >= 2 && a[0] === s, args: 2, perSecond: 15, check: (a) => a[1] >= 0 && a[1] <= 60 },
+  foragerSlip: { seat: (s, a) => s >= 2 && a[0] === s, args: 1, perSecond: 4 },
+  foragerPuff: { seat: (s, a) => s >= 2 && a[0] === s, args: 1, perSecond: 4 },
+  foragerHome: { seat: (s, a) => s >= 2 && a[0] === s, args: 1, perSecond: 2 },
+  salveThrow: { seat: (s) => s === 1, args: 0, perSecond: 6 },
+  salveHit: { seat: (s) => s === 1, args: 2, perSecond: 6, check: (a) => a[0] >= 0 && a[0] <= 4 },
+  salveCloud: { seat: (s) => s === 1, args: 0, perSecond: 2 },
 };
 
 class Room {
@@ -93,6 +95,10 @@ class Room {
   }
 
   tick() {
+    try { this.advance(); } catch (err) { console.error(`room ${this.code} stopped:`, err); clearInterval(this.timer); this.phase = "done"; }
+  }
+
+  advance() {
     const now = performance.now();
     this.acc += Math.min(0.25, (now - this.last) / 1000);
     this.last = now;
@@ -122,6 +128,19 @@ class Room {
     const args = Array.isArray(msg.args) ? msg.args.slice(0, rule.args).map(Number) : [];
     if (args.length !== rule.args || !args.every(Number.isFinite)) return;
     if (!rule.seat(p.seat, args) || (rule.check && !rule.check(args))) return;
+    const now = Date.now();
+    if (!p.rate || now - p.rate.since > 1000) p.rate = { since: now, counts: {} };
+    p.rate.counts[msg.name] = (p.rate.counts[msg.name] || 0) + 1;
+    if (p.rate.counts[msg.name] > rule.perSecond) return;
+    // a salve can only land if one was thrown: each throw the sim accepted allows one hit
+    if (msg.name === "salveHit") {
+      if (!p.throws) return;
+      p.throws--;
+    }
+    if (msg.name === "salveThrow") {
+      if (this.sim.salveThrow()) p.throws = Math.min(5, (p.throws || 0) + 1);
+      return;
+    }
     this.sim[msg.name](...args);
   }
 
@@ -192,39 +211,49 @@ export async function createParties({ lan = [] } = {}) {
     if (room.phase !== "lobby") room.sendState();
   }
 
+  function handle(sock, msg) {
+    const room = sock.room;
+    if (room && !room.players.has(sock)) return;   // a socket already removed from its room says nothing more
+    if (!room) {
+      if (msg.t === "create") {
+        const r = new Room(newCode(), new Sim(x));
+        r.foragers = Math.max(1, Math.min(3, Number(msg.foragers) || 3));
+        rooms.set(r.code, r);
+        admit(sock, r, msg.gear);
+      } else if (msg.t === "join") {
+        const r = rooms.get(String(msg.code || "").toUpperCase());
+        if (!r) { sock.send({ t: "error", text: "No garden party with that code. Check the letters?" }); return; }
+        if (r.players.size >= 8) { sock.send({ t: "error", text: "That party is full." }); return; }
+        admit(sock, r, msg.gear, typeof msg.token === "string" ? msg.token : null);
+      }
+      return;
+    }
+    const isHost = room.host === sock;
+    switch (msg.t) {
+      case "seat": room.takeSeat(sock, String(msg.role)); break;
+      case "settings":
+        if (isHost && room.phase !== "visit") {
+          room.foragers = Math.max(1, Math.min(3, Number(msg.foragers) || 3));
+          // seats beyond the new count no longer exist
+          for (const q of room.players.values()) if (q.seat !== null && q.seat >= 2 + room.foragers) q.seat = null;
+          room.broadcastLobby();
+        }
+        break;
+      case "start": if (isHost && room.phase !== "visit") room.start(); break;
+      case "home": if (isHost && room.phase === "visit") room.sim.groupHome(); break;
+      case "again": if (isHost && room.phase === "done") { room.phase = "lobby"; room.broadcastLobby(); } break;
+      case "ev": room.event(sock, msg); break;
+      case "cheer": room.cheer(sock, String(msg.kind)); break;
+      default: break;
+    }
+  }
+
   return function onSocket(sock) {
     sock.on("message", (text) => {
       let msg;
       try { msg = JSON.parse(text); } catch { return; }
       if (!msg || typeof msg.t !== "string") return;
-      const room = sock.room;
-      if (!room) {
-        if (msg.t === "create") {
-          const r = new Room(newCode(), new Sim(x));
-          r.foragers = Math.max(1, Math.min(3, Number(msg.foragers) || 3));
-          rooms.set(r.code, r);
-          admit(sock, r, msg.gear);
-        } else if (msg.t === "join") {
-          const r = rooms.get(String(msg.code || "").toUpperCase());
-          if (!r) { sock.send({ t: "error", text: "No garden party with that code. Check the letters?" }); return; }
-          if (r.players.size >= 8) { sock.send({ t: "error", text: "That party is full." }); return; }
-          admit(sock, r, msg.gear, typeof msg.token === "string" ? msg.token : null);
-        }
-        return;
-      }
-      const isHost = room.host === sock;
-      switch (msg.t) {
-        case "seat": room.takeSeat(sock, String(msg.role)); break;
-        case "settings":
-          if (isHost && room.phase !== "visit") { room.foragers = Math.max(1, Math.min(3, Number(msg.foragers) || 3)); room.broadcastLobby(); }
-          break;
-        case "start": if (isHost && room.phase !== "visit") room.start(); break;
-        case "home": if (isHost && room.phase === "visit") room.sim.groupHome(); break;
-        case "again": if (isHost && room.phase === "done") { room.phase = "lobby"; room.broadcastLobby(); } break;
-        case "ev": room.event(sock, msg); break;
-        case "cheer": room.cheer(sock, String(msg.kind)); break;
-        default: break;
-      }
+      try { handle(sock, msg); } catch (err) { console.error("party message failed:", err); }
     });
     sock.on("close", () => {
       const room = sock.room;

@@ -54,6 +54,7 @@ export class ForagerView {
     this.puffClock = 1.5;
     this.salveFx = [];
     this.flowerLook = 0;
+    this.homeAsked = -10;
     this.fullWarned = false;
     this.flown = 0;
 
@@ -108,6 +109,7 @@ export class ForagerView {
     this.sim.foragerHome(this.slot);
     this.audio.sfx("home");
     this.mode = "home";
+    this.homeAsked = this.t;
     this.particles.burst(this.toScreenX(this.bee.x), this.toScreenY(this.bee.y), 14, "honey", { speed: 180, life: 0.9 });
   }
 
@@ -197,7 +199,7 @@ export class ForagerView {
     if (s[E.ended]) this.mode = "ended";
     else if (status === STATUS.resting && this.mode !== "resting") { this.mode = "resting"; }
     else if (status === STATUS.homeTrip) { this.mode = "home"; }
-    else if ((this.mode === "resting" || this.mode === "home") && status === STATUS.working) {
+    else if ((this.mode === "resting" || this.mode === "home") && status === STATUS.working && !(this.mode === "home" && this.t - this.homeAsked < 0.6)) {
       this.placeAt(this.bee.y);
       this.mode = "ready";
       this.modeT = 1.0;
@@ -304,7 +306,8 @@ export class ForagerView {
   flash(text) { this.banner = { text, t: 1.8 }; }
 
   prune() {
-    const low = this.camY - 600;
+    // keep the path back to the last leaf: a slip returns there, however far behind it is
+    const low = Math.min(this.camY - 600, this.checkpoint.y - 60);
     while (this.route.length > 3 && this.route[1].y < low) this.route.shift();
     this.drops = this.drops.filter((d) => d.y > low && !(d.taken && d.y < this.bee.y - 40));
     this.checkpoints = this.checkpoints.filter((c) => c === this.checkpoint || c.y > low);

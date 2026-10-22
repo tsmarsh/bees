@@ -20,15 +20,20 @@ export class Audio {
     this.enabled = true;
     this.ctx = null;
     this.playing = false;
-    this.t0 = 0;
     this.perf0 = performance.now() / 1000;
+    this.pausedAt = 0;
+    this.nextBeat = 0;
     this.intensity = 0.5;
   }
 
   get beat() { return BEAT; }
 
   ensure() {
-    if (this.ctx || !this.enabled) return;
+    if (!this.enabled) return;
+    if (this.ctx) {
+      if (this.ctx.state === "suspended" && !this.pausedAt) this.ctx.resume();
+      return;
+    }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) { this.enabled = false; return; }
     this.ctx = new AC();
@@ -44,26 +49,19 @@ export class Audio {
 
   setEnabled(on) {
     this.enabled = on;
-    if (!on && this.ctx) { this.ctx.close(); this.ctx = null; this.playing = false; }
+    if (!on && this.ctx) { this.ctx.close(); this.ctx = null; }
   }
 
-  // Seconds on the music clock: the audio clock when there is one (minus its output latency), else the page clock.
-  now() {
-    if (this.ctx && this.playing) {
-      const lat = (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0);
-      return this.ctx.currentTime - this.t0 - lat;
-    }
-    return performance.now() / 1000 - this.perf0;
-  }
+  // Seconds of song since start(), on the page clock. The page clock always runs, so the tank's notes keep coming even
+  // where a browser won't start audio without a tap (iOS); the band follows this clock whenever it can play.
+  now() { return performance.now() / 1000 - this.perf0; }
 
   start() {
-    this.ensure();
     this.perf0 = performance.now() / 1000;
-    if (!this.ctx) return;
-    if (this.ctx.state === "suspended") this.ctx.resume();
+    this.pausedAt = 0;
     this.playing = true;
-    this.t0 = this.ctx.currentTime + 0.05;
     this.nextBeat = 0;
+    this.ensure();
     clearInterval(this.timer);
     this.timer = setInterval(() => this.schedule(), 25);
   }
@@ -71,10 +69,9 @@ export class Audio {
   stop() {
     clearInterval(this.timer);
     this.playing = false;
-    this.perf0 = performance.now() / 1000;
   }
 
-  // The music clock stops while paused, with or without sound, so no note is missed during a breather.
+  // The song stops while paused, with or without sound, so no note is missed during a breather.
   pause() {
     this.pausedAt = performance.now() / 1000;
     if (this.ctx && this.ctx.state === "running") this.ctx.suspend();
@@ -83,14 +80,20 @@ export class Audio {
 
   resume() {
     if (this.pausedAt) { this.perf0 += performance.now() / 1000 - this.pausedAt; this.pausedAt = 0; }
-    if (this.ctx) { this.ctx.resume(); if (this.playing) this.timer = setInterval(() => this.schedule(), 25); }
+    if (this.ctx) this.ctx.resume();
+    if (this.playing) { clearInterval(this.timer); this.timer = setInterval(() => this.schedule(), 25); }
   }
 
+  // Beat n is heard at song time n * BEAT: schedule it at the audio time that, after the output latency, lands there.
   schedule() {
-    if (!this.ctx || !this.playing) return;
-    const ahead = this.ctx.currentTime - this.t0 + 0.12;
-    while (this.nextBeat * BEAT < ahead) {
-      this.playBeat(this.nextBeat, this.t0 + this.nextBeat * BEAT);
+    if (!this.ctx || !this.playing || this.ctx.state !== "running") return;
+    const song = this.now();
+    const lat = (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0);
+    const toAudio = (t) => this.ctx.currentTime + (t - song) - lat;
+    this.nextBeat = Math.max(this.nextBeat, Math.ceil((song + lat) / BEAT));
+    while (this.nextBeat * BEAT < song + 0.12 + lat) {
+      const at = toAudio(this.nextBeat * BEAT);
+      if (at >= this.ctx.currentTime) this.playBeat(this.nextBeat, at);
       this.nextBeat++;
     }
   }

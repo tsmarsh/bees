@@ -62,7 +62,8 @@ export class HealerView {
     canvas.addEventListener("pointerdown", this.onDown);
     canvas.addEventListener("pointermove", this.onMove);
     canvas.addEventListener("pointerup", this.onUp);
-    canvas.addEventListener("pointercancel", () => (this.drag = null));
+    this.onCancel = () => (this.drag = null);
+    canvas.addEventListener("pointercancel", this.onCancel);
     window.addEventListener("keydown", this.onKey);
   }
 
@@ -70,6 +71,7 @@ export class HealerView {
     this.canvas.removeEventListener("pointerdown", this.onDown);
     this.canvas.removeEventListener("pointermove", this.onMove);
     this.canvas.removeEventListener("pointerup", this.onUp);
+    this.canvas.removeEventListener("pointercancel", this.onCancel);
     window.removeEventListener("keydown", this.onKey);
   }
 
@@ -144,6 +146,9 @@ export class HealerView {
           y += (L.hive.y - y) * away;
         }
       }
+      // every target stays on screen, however narrow the phone
+      x = Math.max(L.beeR * 1.9, Math.min(this.w - L.beeR * 1.9, x));
+      y = Math.max(L.beeR * 1.9, Math.min(L.ground - L.beeR, y));
       out.push({ i, x, y, r: L.beeR, status });
     }
     return out;
