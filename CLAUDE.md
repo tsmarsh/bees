@@ -52,7 +52,7 @@ make wasm                     # after any change under sim/: rebuild and commit 
 make balance                  # the tuning table
 ```
 
-- fibber: `fibc` 0.1.17 or later (`FIBC=...`), and `WASI_SDK` for wasm builds (fibber's `scripts/fetch-wasm-tools.sh`).
+- fibber: `fibc` 0.1.18 or later (`FIBC=...`), and `WASI_SDK` for wasm builds (fibber's `scripts/fetch-wasm-tools.sh`).
   Read the fibber skill or the fibber repo's docs before writing fibber; `fibc test -I sim sim/specs` runs specs.
 - Specs are behaviour: `feature` / `scenario` / `given` / `upon` / `then`, and `prop` for properties over random play. A test
   that cannot fail is worse than none: plant the fault, watch it fail, take it out.

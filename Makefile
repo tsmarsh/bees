@@ -1,4 +1,4 @@
-# Allerbees build. Needs fibc (fibber >= 0.1.17) on PATH or FIBC=..., and WASI_SDK for the wasm build
+# Allerbees build. Needs fibc (fibber >= 0.1.18) on PATH or FIBC=..., and WASI_SDK for the wasm build
 # (fibber's scripts/fetch-wasm-tools.sh fetches the pinned wasi-sdk). The web client itself has no build step.
 FIBC ?= fibc
 SIM := sim/allerbees/*.fib

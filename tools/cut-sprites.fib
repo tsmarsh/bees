@@ -10,18 +10,17 @@
 ;;
 ;; Reads 8-bit RGB or RGBA PNGs. zlib inflates the sheet and deflates a PNG; libwebp encodes the WebP (quality 90).
 ;; Images are persistent vectors threaded through loops: each is held once, so an update is in place.
-(ns main (:require [Math :as Math] [fib.math :as math] [fib.os :as os] [fib.os.native :as n]))
+(ns main (:require [Math :as Math] [fib.os :as os] [fib.os.native :as n]))
 
 (extern uncompress (ptr ptr ptr i64) -> i32 :lib "z")
 (extern compress2 (ptr ptr ptr i64 i32) -> i32 :lib "z")
 (extern compressBound (i64) -> i64 :lib "z")
 (extern crc32 (i64 ptr i32) -> i64 :lib "z")
-(extern WebPEncodeRGBA (ptr i32 i32 i32 f32 ptr) -> i64 :lib ":libwebp.so.7")
-(extern WebPFree (ptr) -> unit :lib ":libwebp.so.7")
+(extern WebPEncodeRGBA (ptr i32 i32 i32 f32 ptr) -> i64 :lib "webp")
+(extern WebPFree (ptr) -> unit :lib "webp")
 
 (def STEP 4) ; figures are found on a grid this coarse; the alpha edge itself stays full resolution
 (def PAD 8)
-(def PI 3.141592653589793)
 
 (defstruct Sheet (w: i64 h: i64 rgb: (Vec i8)))
 (defstruct Region (id: i64 x0: i64 y0: i64 x1: i64 y1: i64 n: i64))
@@ -137,7 +136,7 @@
 (defun soft-alpha (bg: (Vec i8) w: i64 h: i64) -> (Vec i8)
   (let [at (fn (x: i64 y: i64) (+ (* (clamp y 0 (- h 1)) w) (clamp x 0 (- w 1))))
         near-bg? (fn (x: i64 y: i64) (around? x y (fn (u: i64 v: i64) (= (nth bg (at u v)) 1i8))))
-        kernel (let [ws (mapv (fn (d: i64) (math/exp (/ (* -1.0 (double (* d d))) (* 2.0 0.64)))) (range -3 4))
+        kernel (let [ws (mapv (fn (d: i64) (Math/exp (/ (* -1.0 (double (* d d))) (* 2.0 0.64)))) (range -3 4))
                      total (reduce + 0.0 ws)]
                  (mapv (fn (x: f64) (/ x total)) ws))
         mn (mapv (fn (i: i64) (if (near-bg? (rem i w) (quot i w)) 0.0 255.0)) (range (* w h)))
@@ -210,7 +209,7 @@
 
 (defun lanczos (x: f64) -> f64
   (cond (= x 0.0) 1.0 (>= (Math/abs x) 3.0) 0.0
-        :else (let [px (* PI x)] (/ (* 3.0 (math/sin px) (math/sin (/ px 3.0))) (* px px)))))
+        :else (let [px (* Math/PI x)] (/ (* 3.0 (Math/sin px) (Math/sin (/ px 3.0))) (* px px)))))
 
 ;; Pillow's resampling: each output pixel averages the inputs under a Lanczos-3 window widened by the scale.
 ;; Per output pixel: the first input it reads, then the weights.

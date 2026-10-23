@@ -25,7 +25,7 @@ shadows, no other objects, no text", which is what the cutter needs.
 
 ## Cutting a sheet
 
-The cutter is a fibber program that links zlib and libwebp (`libwebp.so.7`); build it with `make tools/cut-sprites`.
+The cutter is a fibber program that links zlib and libwebp; build it with `make tools/cut-sprites`.
 
 ```
 tools/cut-sprites SHEET.png web/art/bee-healer happy sneezy resting --size 360
